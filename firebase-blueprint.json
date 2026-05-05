@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Represents a professor in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "specialty": { "type": "string" },
+        "totalHours": { "type": "number" },
+        "seniority": { "type": "number" },
+        "availabilityExceptions": { "type": "array" }
+      },
+      "required": ["name", "specialty"]
+    },
+    "Exam": {
+      "title": "Exam",
+      "description": "Represents an exam session.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "subject": { "type": "string" },
+        "date": { "type": "string" },
+        "period": { "type": "string", "enum": ["morning", "afternoon"] },
+        "duration": { "type": "number" },
+        "hallCount": { "type": "number" },
+        "proctorsPerHall": { "type": "number" }
+      },
+      "required": ["subject", "date", "period", "duration"]
+    },
+    "Hall": {
+      "title": "Hall",
+      "description": "Represents an exam hall.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "capacity": { "type": "number" }
+      },
+      "required": ["name"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Represents a proctoring assignment.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "examId": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "hallId": { "type": "string" },
+        "period": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["examId", "teacherId", "hallId"]
+    },
+    "SystemSettings": {
+      "title": "System Settings",
+      "description": "Global settings for the institution.",
+      "type": "object",
+      "properties": {
+        "institutionName": { "type": "string" },
+        "proctorRatio": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "/teachers/{teacherId}": {
+      "schema": "Teacher",
+      "description": "Primary collection for teachers data."
+    },
+    "/exams/{examId}": {
+      "schema": "Exam",
+      "description": "Primary collection for exam schedule."
+    },
+    "/halls/{hallId}": {
+      "schema": "Hall",
+      "description": "Collection of available exam halls."
+    },
+    "/assignments/{assignmentId}": {
+      "schema": "Assignment",
+      "description": "Generated proctoring assignments."
+    },
+    "/settings/global": {
+      "schema": "SystemSettings",
+      "description": "Global institution settings."
+    }
+  }
+}

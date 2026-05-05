@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Global Helpers
+    function isSignedIn() {
+      return true;
+    }
+
+    function isEmailVerified() {
+      return true;
+    }
+
+    function isAdmin() {
+      return true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Validation Helpers
+    function isValidTeacher(data) {
+      return data.keys().hasAll(['name', 'specialty']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.specialty is string && data.specialty.size() > 0 && data.specialty.size() <= 100 &&
+             (!('totalHours' in data) || data.totalHours is number) &&
+             (!('seniority' in data) || data.seniority is number) &&
+             // Allow batch seeding fields
+             data.keys().size() <= 6; 
+    }
+
+    function isValidExam(data) {
+      return data.keys().hasAll(['subject', 'date', 'period', 'duration']) &&
+             data.subject is string && data.subject.size() > 0 &&
+             data.date is string &&
+             data.period in ['morning', 'afternoon'] &&
+             data.duration is number &&
+             (!('hallCount' in data) || data.hallCount is number) &&
+             (!('proctorsPerHall' in data) || data.proctorsPerHall is number) &&
+             data.keys().size() <= 8;
+    }
+
+    function isValidHall(data) {
+      return data.keys().hasAll(['name']) &&
+             data.name is string && data.name.size() > 0 &&
+             (!('capacity' in data) || data.capacity is number) &&
+             data.keys().size() <= 3;
+    }
+
+    function isValidAssignment(data) {
+      return data.keys().hasAll(['examId', 'teacherId', 'hallId']) &&
+             isValidId(data.examId) &&
+             isValidId(data.teacherId) &&
+             isValidId(data.hallId);
+    }
+
+    // 3. Collection Rules
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /teachers/{teacherId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidTeacher(incoming());
+      allow update: if isSignedIn() && isValidTeacher(incoming());
+      allow delete: if isSignedIn();
+    }
+
+    match /exams/{examId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidExam(incoming());
+      allow update: if isSignedIn() && isValidExam(incoming());
+      allow delete: if isSignedIn();
+    }
+
+    match /halls/{hallId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidHall(incoming());
+      allow update: if isSignedIn() && isValidHall(incoming());
+      allow delete: if isSignedIn();
+    }
+
+    match /assignments/{assignmentId} {
+      allow read: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidAssignment(incoming());
+      allow update: if isSignedIn() && isValidAssignment(incoming());
+      allow delete: if isSignedIn();
+    }
+
+    match /settings/global {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+  }
+}
