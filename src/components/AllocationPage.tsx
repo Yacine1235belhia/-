@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../lib/api';
 import { Teacher, Exam, Hall, Assignment } from '../types';
 import { generateAssignments } from '../lib/allocation';
-import { Wand2, Download, Printer, Trash2, Calendar, User, DoorOpen, ListFilter } from 'lucide-react';
+import { Wand2, Download, Printer, Trash2, Calendar, User, DoorOpen, ListFilter, X } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 export default function AllocationPage() {
@@ -13,6 +13,15 @@ export default function AllocationPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [institutionName, setInstitutionName] = useState('المؤسسة التعليمية');
+  const [wilaya, setWilaya] = useState('..........................');
+  const [schoolYear, setSchoolYear] = useState('2025-2026');
+  const [selectedTerm, setSelectedTerm] = useState('الفصل الثالث');
+  const [selectedYears, setSelectedYears] = useState<string[]>(['الأولى', 'الثانية']);
+  const [morningTime, setMorningTime] = useState('08:00 - 12:00');
+  const [afternoonTime, setAfternoonTime] = useState('13:00 - 17:00');
+  const [showPrintModal, setShowPrintModal] = useState(false);
+
+  const examType = `${selectedTerm}${selectedYears.length > 0 ? (selectedYears.length > 1 ? ' - السنوات ' : ' - السنة ') + selectedYears.join(' و ') : ''}`;
 
   useEffect(() => {
     Promise.all([
@@ -25,8 +34,10 @@ export default function AllocationPage() {
       setTeachers(tData);
       setExams(eData);
       setHalls(hData);
-      if (sData && sData.global && sData.global.institutionName) {
-        setInstitutionName(sData.global.institutionName);
+      if (sData) {
+        if (sData.institutionName) setInstitutionName(sData.institutionName);
+        if (sData.morningTime) setMorningTime(sData.morningTime);
+        if (sData.afternoonTime) setAfternoonTime(sData.afternoonTime);
       }
       setAssignments(aData);
       setLoading(false);
@@ -76,7 +87,12 @@ export default function AllocationPage() {
     }
   };
 
-  const exportPDF = () => {
+  const handlePrintClick = () => {
+    setShowPrintModal(true);
+  };
+
+  const executePrint = () => {
+    setShowPrintModal(false);
     toast.success('تم طلب الطباعة. إذا لم تفتح نافذة الطباعة تلقائياً، يرجى فتح التطبيق في المتصفح المباشر عبر الزر أعلى يمين الشاشة.', { duration: 8000, icon: '🖨️' });
     setTimeout(() => {
       try {
@@ -87,23 +103,36 @@ export default function AllocationPage() {
     }, 500);
   };
 
-  const getExamName = (id: string) => exams.find(e => e.id === id)?.subject || 'مادة محذوفة';
-  const getTeacherName = (id: string) => teachers.find(t => t.id === id)?.name || 'أستاذ محذوف';
-  const getHallName = (id: string) => halls.find(h => h.id === id)?.name || 'قاعة محذوفة';
+  const getExamName = (id: any) => exams.find(e => String(e.id) === String(id))?.subject || 'مادة محذوفة';
+  const getTeacherName = (id: any) => teachers.find(t => String(t.id) === String(id))?.name || 'أستاذ محذوف';
+  const getHallName = (id: any) => halls.find(h => String(h.id) === String(id))?.name || 'قاعة محذوفة';
 
-  const earliestExamDate = exams.length > 0 
-    ? new Date(Math.min(...exams.map(e => new Date(e.date).getTime())))
-    : new Date();
-  
-  const weekDates = [0, 1, 2, 3, 4].map(offset => {
-    const d = new Date(earliestExamDate);
-    d.setDate(earliestExamDate.getDate() - earliestExamDate.getDay() + offset);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  // Helper to get the Sunday starting date of a week for a given date
+  const getWeekStart = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() - d.getDay()); // Always Sunday
+    return d.toISOString().split('T')[0];
+  };
+
+  // Group assignments by week (Sunday start date)
+  const assignmentsByWeek: Record<string, string[]> = {};
+  exams.forEach(exam => {
+    const weekStart = getWeekStart(exam.date);
+    if (weekStart && !assignmentsByWeek[weekStart]) {
+      // Create week dates (Sunday to Thursday)
+      const dates: string[] = [];
+      const startD = new Date(weekStart);
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(startD);
+        d.setDate(startD.getDate() + i);
+        dates.push(d.toISOString().split('T')[0]);
+      }
+      assignmentsByWeek[weekStart] = dates;
+    }
   });
 
+  const uniqueWeeks = Object.keys(assignmentsByWeek).sort();
   const dayNames = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
 
   return (
@@ -121,7 +150,7 @@ export default function AllocationPage() {
         
         <div className="flex flex-col sm:flex-row gap-3">
           <button 
-            onClick={exportPDF}
+            onClick={handlePrintClick}
             className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-gray-100 text-gray-700 px-6 py-3 lg:py-2.5 rounded-xl hover:bg-gray-200 transition-all font-bold text-sm"
           >
             <Printer size={18} />
@@ -138,79 +167,110 @@ export default function AllocationPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden print:overflow-visible print:border-none print:shadow-none">
-        <div className="p-4 lg:p-6 border-b border-gray-100 flex justify-between items-center print:hidden">
-          <div className="flex items-center gap-2">
-            <ListFilter size={18} className="text-gray-400" />
-            <span className="font-bold text-gray-700 text-sm lg:text-base">قائمة التكليفات ({assignments.length})</span>
-          </div>
-        </div>
-        
-        <div className="hidden lg:block overflow-x-auto print:hidden">
-          <table className="w-full text-right border-collapse print:text-sm">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-100 print:bg-white print:border-black">
-                <th className="p-4 font-bold text-gray-600">المادة</th>
-                <th className="p-4 font-bold text-gray-600">أستاذ الحراسة</th>
-                <th className="p-4 font-bold text-gray-600">القاعة</th>
-                <th className="p-4 font-bold text-gray-600">التاريخ</th>
-                <th className="p-4 font-bold text-gray-600 text-center">الفترة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assignments.map((assignment) => (
-                <tr key={assignment.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                  <td className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-2 h-2 rounded-full bg-blue-500" />
-                      <span className="font-bold">{getExamName(assignment.examId)}</span>
-                    </div>
-                  </td>
-                  <td className="p-4 text-gray-700">{getTeacherName(assignment.teacherId)}</td>
-                  <td className="p-4">
-                    <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-lg text-sm font-bold">
-                      {getHallName(assignment.hallId)}
-                    </span>
-                  </td>
-                  <td className="p-4 text-gray-500 font-mono text-sm">{assignment.date}</td>
-                  <td className="p-4 text-center">
-                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                      assignment.period === 'morning' ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-indigo-50 text-indigo-700 border border-indigo-100'
-                    }`}>
-                      {assignment.period === 'morning' ? 'صباحي' : 'مسائي'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Mobile View */}
-        <div className="lg:hidden p-4 space-y-3 print:hidden">
-          {assignments.map((assignment) => (
-            <div key={assignment.id} className="bg-gray-50 p-4 rounded-xl border border-gray-100 space-y-3">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4 className="font-bold text-blue-900 text-sm">{getExamName(assignment.examId)}</h4>
-                  <p className="text-xs text-gray-500 mt-0.5">{getTeacherName(assignment.teacherId)}</p>
-                </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                  assignment.period === 'morning' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'
-                }`}>
-                  {assignment.period === 'morning' ? 'صباحي' : 'مسائي'}
-                </span>
+      {showPrintModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm print:hidden">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center shrink-0">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Printer size={24} className="text-blue-600" />
+                إعدادات الطباعة
+              </h2>
+              <button 
+                onClick={() => setShowPrintModal(false)}
+                className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-full transition-all"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">مديرية التربية لولاية</label>
+                <input 
+                  type="text" 
+                  value={wilaya} 
+                  onChange={(e) => setWilaya(e.target.value)} 
+                  className="w-full text-sm rounded-xl border border-gray-200 px-3 py-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                />
               </div>
-              <div className="flex justify-between items-center text-[11px] text-gray-500 font-medium bg-white/50 p-2 rounded-lg">
-                <span className="flex items-center gap-1"><Calendar size={12} /> {assignment.date}</span>
-                <span className="flex items-center gap-1 font-bold text-gray-700"><DoorOpen size={12} /> {getHallName(assignment.hallId)}</span>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">المؤسسة التعليمية</label>
+                <input 
+                  type="text" 
+                  value={institutionName} 
+                  onChange={(e) => setInstitutionName(e.target.value)} 
+                  className="w-full text-sm rounded-xl border border-gray-200 px-3 py-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">الموسم الدراسي</label>
+                <input 
+                  type="text" 
+                  value={schoolYear} 
+                  onChange={(e) => setSchoolYear(e.target.value)} 
+                  className="w-full text-sm rounded-xl border border-gray-200 px-3 py-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-left" dir="ltr"
+                />
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">الفصل الدراسي</label>
+                  <select
+                    value={selectedTerm}
+                    onChange={(e) => setSelectedTerm(e.target.value)}
+                    className="w-full text-sm rounded-xl border border-gray-200 px-3 py-2.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  >
+                    <option value="الفصل الأول">الفصل الأول</option>
+                    <option value="الفصل الثاني">الفصل الثاني</option>
+                    <option value="الفصل الثالث">الفصل الثالث</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">المستويات المعنية</label>
+                  <div className="flex flex-wrap gap-3">
+                    {['الأولى', 'الثانية', 'الثالثة'].map(year => (
+                      <label key={year} className="flex items-center gap-2 cursor-pointer bg-slate-50 border border-gray-200 px-3 py-2 rounded-lg hover:border-blue-400 transition-all">
+                        <input
+                          type="checkbox"
+                          checked={selectedYears.includes(year)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedYears([...selectedYears, year]);
+                            } else {
+                              setSelectedYears(selectedYears.filter(y => y !== year));
+                            }
+                          }}
+                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">السنة {year}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
-          ))}
+
+            <div className="p-6 bg-gray-50 flex justify-end gap-3 rounded-b-2xl shrink-0">
+              <button 
+                onClick={() => setShowPrintModal(false)}
+                className="px-6 py-2.5 rounded-xl font-bold text-gray-600 hover:bg-gray-200 transition-all"
+              >
+                إلغاء
+              </button>
+              <button 
+                onClick={executePrint}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold bg-blue-600 text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+              >
+                <Printer size={18} />
+                تأكيد وطباعة
+              </button>
+            </div>
+          </div>
         </div>
-          
+      )}
+
+      <div className="bg-transparent print:bg-white overflow-hidden print:overflow-visible print:border-none print:shadow-none">
         {assignments.length === 0 && !loading && (
-          <div className="p-10 lg:p-20 text-center print:hidden">
+          <div className="p-10 lg:p-20 text-center print:hidden bg-white rounded-2xl border border-gray-100 shadow-sm mt-4">
             <div className="w-16 h-16 lg:w-24 lg:h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
               <Printer size={32} className="text-gray-200 lg:w-12 lg:h-12" />
             </div>
@@ -218,79 +278,120 @@ export default function AllocationPage() {
           </div>
         )}
 
-        {/* Printable Cards */}
-        <div className="hidden print:block font-serif w-full text-black" dir="rtl">
-          {teachers.map((teacher) => {
-            const teacherAssignments = assignments.filter(a => a.teacherId === teacher.id);
-            if (teacherAssignments.length === 0) return null;
+        {/* On-Screen & Printable Cards */}
+        <div id="print-area" className="p-4 lg:p-6 font-serif w-full text-black print:p-0 print:m-0" dir="rtl">
+          {teachers.map((teacher, idx) => {
+            const teacherAssignments = assignments.filter(a => String(a.teacherId) === String(teacher.id));
+            const isLastOnPage = (idx + 1) % 4 === 0;
             
             return (
-              <div key={teacher.id} className="mb-8 p-6 border-2 border-black rounded-xl break-inside-avoid shadow-none pb-12">
-                <div className="text-center font-bold mb-4 leading-tight text-sm">
-                  <p>الجمهورية الجزائرية الديمقراطية الشعبية</p>
-                  <p>وزارة التربية الوطنية</p>
-                  <p>المؤسسة: {institutionName}</p>
-                  <h3 className="text-lg mt-2 font-bold underline underline-offset-4">تخصيص الحراسة الخاص بالأستاذ</h3>
-                </div>
-                
-                <div className="mb-4 text-base font-bold underline underline-offset-4">
-                  الأستاذ(ة): {teacher.name}
+              <div key={teacher.id} className={`mb-12 p-4 lg:p-8 border-2 border-gray-300 rounded-xl bg-white print:m-0 print:flex print:flex-col print:py-3 print:px-4 print:border-0 print:break-inside-avoid print:h-[6.8cm] print:min-h-[6.8cm] print:box-border print:overflow-hidden ${!isLastOnPage ? 'print:border-b-2 print:border-dashed print:border-gray-800' : 'print:break-after-page'}`}>
+                <div>
+                  <div className="flex justify-between items-start mb-1 font-bold text-sm lg:text-base print:text-[11px] leading-tight text-black">
+                    <div className="text-right">
+                      <p>مديرية التربية لولاية {wilaya}</p>
+                      <p>مؤسسة: {institutionName}</p>
+                    </div>
+                    <div className="text-left" dir="ltr">
+                      <p>الموسم الدراسي : {schoolYear}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="text-center font-bold mb-1 text-xl lg:text-2xl print:text-[15px] mt-2 print:mt-1 leading-tight text-black">
+                    استدعاء لحراسة {examType}
+                  </div>
+
+                  <div className="text-right font-bold mb-1 text-base lg:text-lg print:text-[12px] space-y-0.5 leading-tight text-black">
+                    <p>إلى الأستاذ(ة): <span className="text-xl print:text-[14px] ml-2 border-b border-black pb-0.5 inline-block">{teacher.name}</span></p>
+                    <p className="font-normal print:text-[11px]">أنتم مدعوون لحراسة الإختبارات حسب الجدول التالي :</p>
+                  </div>
                 </div>
 
-                <table className="w-full text-center border-collapse border-b-2 border-l-2 border-black text-sm">
-                  <thead>
-                    <tr>
-                      <th className="border-t-2 border-r-2 border-black p-2 bg-gray-100 print:bg-gray-100 align-middle whitespace-nowrap">اليوم / التوقيت</th>
-                      {weekDates.map((date, index) => (
-                        <th key={date} className="border-t-2 border-r-2 border-black p-2 bg-gray-100 print:bg-gray-100 min-w-[100px]">
-                          <div>{dayNames[index]}</div>
-                          <div className="font-normal text-xs font-mono mt-1">{date}</div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <th className="border-t-2 border-r-2 border-black p-2 bg-gray-100 print:bg-gray-100 align-middle">الفترة الصباحية</th>
-                      {weekDates.map(date => {
-                        const morning = teacherAssignments.find(a => a.date === date && a.period === 'morning');
-                        const mExam = morning ? exams.find(e => e.id === morning.examId) : null;
-                        const mHall = morning ? halls.find(h => h.id === morning.hallId) : null;
-                        return (
-                          <td key={date} className="border-t-2 border-r-2 border-black p-2">
-                            {morning ? (
-                              <div className="text-xs">
-                                <div className="font-bold mb-1 max-w-[120px] mx-auto break-words">{mExam?.subject}</div>
-                                <div>القاعة: <span className="font-bold">{mHall?.name}</span></div>
-                              </div>
-                            ) : ''}
-                          </td>
-                        )
-                      })}
-                    </tr>
-                    <tr>
-                      <th className="border-t-2 border-r-2 border-black p-2 bg-gray-100 print:bg-gray-100 align-middle">الفترة المسائية</th>
-                      {weekDates.map(date => {
-                        const afternoon = teacherAssignments.find(a => a.date === date && a.period === 'afternoon');
-                        const aExam = afternoon ? exams.find(e => e.id === afternoon.examId) : null;
-                        const aHall = afternoon ? halls.find(h => h.id === afternoon.hallId) : null;
-                        return (
-                          <td key={date} className="border-t-2 border-r-2 border-black p-2">
-                            {afternoon ? (
-                              <div className="text-xs">
-                                <div className="font-bold mb-1 max-w-[120px] mx-auto break-words">{aExam?.subject}</div>
-                                <div>القاعة: <span className="font-bold">{aHall?.name}</span></div>
-                              </div>
-                            ) : ''}
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  </tbody>
-                </table>
+                <div className="flex-grow flex flex-col justify-center">
+                  {uniqueWeeks.map((weekStart, wIndex) => {
+                    const weekDates = assignmentsByWeek[weekStart];
+                    
+                    return (
+                      <div key={weekStart} className={wIndex > 0 ? "mt-4 print:mt-2" : ""}>
+                        {uniqueWeeks.length > 1 && (
+                          <div className="mb-1 text-sm print:text-[10px] font-bold p-0 text-black">
+                            الأسبوع {wIndex + 1}
+                          </div>
+                        )}
+                        <table className="w-full text-center border-collapse border-b border-l border-black text-sm print:text-[10px] text-black">
+                          <thead>
+                            <tr>
+                              <th className="border-t border-r border-black p-1 lg:p-2 bg-gray-50 print:bg-gray-100 align-middle whitespace-nowrap w-24 print:w-16 print:p-0.5">اليوم</th>
+                              {weekDates.map((date, index) => (
+                                <th key={`day-${date}`} className="border-t border-r border-black p-1 lg:p-2 bg-gray-50 print:bg-gray-100 font-bold print:p-0.5">
+                                  {dayNames[index]}
+                                </th>
+                              ))}
+                            </tr>
+                            <tr>
+                              <th className="border-t border-r border-black p-1 lg:p-2 bg-gray-50 print:bg-gray-100 align-middle whitespace-nowrap print:p-0.5">التوقيت</th>
+                              {weekDates.map((date) => (
+                                 <th key={`date-${date}`} className="border-t border-r border-black p-1 lg:p-2 bg-gray-50 print:bg-gray-100 font-normal text-xs print:text-[10px] print:p-0.5 leading-none">
+                                  {date}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <th className="border-t border-r border-black p-1 lg:p-2 print:p-0.5 align-middle font-mono font-bold leading-none bg-gray-50 print:bg-gray-100" dir="ltr">
+                                {morningTime}
+                              </th>
+                              {weekDates.map(date => {
+                                const morning = teacherAssignments.find(a => a.date === date && a.period === 'morning');
+                                const mExam = morning ? exams.find(e => String(e.id) === String(morning.examId)) : null;
+                                const mHall = morning ? halls.find(h => String(h.id) === String(morning.hallId)) : null;
+                                return (
+                                  <td key={`m-${date}`} className="border-t border-r border-black p-1 lg:p-2 print:p-1 min-h-[50px] lg:h-16 print:h-[26px] align-middle">
+                                    {morning ? (
+                                      <div className="leading-tight flex flex-col items-center justify-center">
+                                        <div className="font-bold text-sm lg:text-base print:text-[12px] whitespace-nowrap text-black">
+                                          {mHall?.name.includes('قاعة') ? mHall?.name : `القاعة ${mHall?.name}`}
+                                        </div>
+                                        {mExam && <div className="text-[10px] lg:text-xs print:text-[10px] mt-0.5 text-gray-800 print:text-black font-medium leading-[1.1] max-w-[120px] lg:max-w-[100%] mx-auto overflow-hidden text-ellipsis px-1">{mExam?.subject}</div>}
+                                      </div>
+                                    ) : '-'}
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                            <tr>
+                              <th className="border-t border-r border-black p-1 lg:p-2 print:p-0.5 align-middle font-mono font-bold leading-none bg-gray-50 print:bg-gray-100" dir="ltr">
+                                {afternoonTime}
+                              </th>
+                              {weekDates.map(date => {
+                                const afternoon = teacherAssignments.find(a => a.date === date && a.period === 'afternoon');
+                                const aExam = afternoon ? exams.find(e => String(e.id) === String(afternoon.examId)) : null;
+                                const aHall = afternoon ? halls.find(h => String(h.id) === String(afternoon.hallId)) : null;
+                                return (
+                                  <td key={`a-${date}`} className="border-t border-r border-black p-1 lg:p-2 print:p-1 min-h-[50px] lg:h-16 print:h-[26px] align-middle">
+                                    {afternoon ? (
+                                      <div className="leading-tight flex flex-col items-center justify-center">
+                                        <div className="font-bold text-sm lg:text-base print:text-[12px] whitespace-nowrap text-black">
+                                          {aHall?.name.includes('قاعة') ? aHall?.name : `القاعة ${aHall?.name}`}
+                                        </div>
+                                        {aExam && <div className="text-[10px] lg:text-xs print:text-[10px] mt-0.5 text-gray-800 print:text-black font-medium leading-[1.1] max-w-[120px] lg:max-w-[100%] mx-auto overflow-hidden text-ellipsis px-1">{aExam?.subject}</div>}
+                                      </div>
+                                    ) : '-'}
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
 
-                <div className="mt-8 flex justify-end px-12 font-bold text-sm">
-                  <p>توقيع الناظر</p>
+                <div className="mt-2 flex justify-between items-center px-4 lg:px-12 font-bold text-base print:text-[11px] leading-tight text-black pt-1">
+                  <div>توقيع الناظر</div>
+                  <div className="text-left">حرر بـ...................... بتاريخ: {new Date().toLocaleDateString('ar-DZ')}</div>
                 </div>
               </div>
             );

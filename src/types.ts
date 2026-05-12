@@ -35,4 +35,6 @@ export interface Assignment {
 export interface SystemSettings {
   institutionName: string;
   proctorRatio: number;
+  morningTime?: string;
+  afternoonTime?: string;
 }

@@ -111,7 +111,7 @@ async function startServer() {
     db.prepare("INSERT INTO accounts (username, password, role) VALUES (?, ?, ?)").run(username, hash, role);
     
     const user = db.prepare("SELECT * FROM accounts WHERE username = ?").get(username);
-    const token = sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: "24h" });
+    const token = sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, username: user.username, role: user.role });
   });
 
@@ -134,7 +134,7 @@ async function startServer() {
     }
 
     console.log(`Login successful for: ${username}`);
-    const token = sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: "24h" });
+    const token = sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, username: user.username, role: user.role });
   });
 
@@ -209,6 +209,54 @@ async function startServer() {
   createCrudRoutes('halls');
   createCrudRoutes('exams');
   createCrudRoutes('assignments');
+
+  // Clear data and seed
+  app.post("/api/seed", authenticateUser, (req, res) => {
+    try {
+      db.exec("DELETE FROM teachers; DELETE FROM halls; DELETE FROM exams; DELETE FROM assignments;");
+      
+      const insertTeacher = db.prepare("INSERT INTO teachers (id, name, specialty, seniority, email, totalHours, availabilityExceptions) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const teacherFirstNames = ["أحمد", "محمد", "علي", "عمر", "حسن", "حسين", "طارق", "كريم", "ياسر", "خالد", "فاطمة", "زينب", "مريم", "سارة", "ليلى", "نورة", "هدى", "سمية", "عائشة", "لبنى"];
+      const teacherLastNames = ["عبد الله", "عبد الرحمن", "محمد", "علي", "محمود", "إبراهيم", "صالح", "سعيد", "خليل", "سليمان", "منصور", "ناصر"];
+      const specialties = ["رياضيات", "فيزياء", "علوم طبيعية", "لغة عربية", "تاريخ وجغرافيا", "لغة فرنسية", "لغة إنجليزية", "فلسفة", "تربية إسلامية", "إعلام آلي"];
+
+      const teachers = [];
+      for (let i = 1; i <= 30; i++) {
+        const firstName = teacherFirstNames[i % teacherFirstNames.length];
+        const lastName = teacherLastNames[i % teacherLastNames.length];
+        const specialty = specialties[i % specialties.length];
+        teachers.push([`t${i}`, `${firstName} ${lastName}`, specialty, (i % 15) + 1, `teacher${i}@example.com`, 0, "[]"]);
+      }
+      teachers.forEach(t => insertTeacher.run(t[0], t[1], t[2], t[3], t[4], t[5], t[6]));
+
+      const insertHall = db.prepare("INSERT INTO halls (id, name, capacity) VALUES (?, ?, ?)");
+      const halls = [];
+      for (let i = 1; i <= 20; i++) {
+        halls.push([`h${i}`, `القاعة ${i}`, 30]);
+      }
+      halls.forEach(h => insertHall.run(h[0], h[1], h[2]));
+
+      const insertExam = db.prepare("INSERT INTO exams (id, subject, date, period, duration, hallCount, proctorsPerHall) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const subjects = ["رياضيات", "فيزياء", "علوم طبيعية", "لغة عربية", "تاريخ وجغرافيا", "لغة فرنسية", "لغة إنجليزية", "فلسفة", "تربية إسلامية", "تربية مدنية", "إعلام آلي", "اقتصاد", "هندسة مدنية", "تسيير مالي", "هندسة طرائق", "هندسة كهربائية", "قانون"];
+      
+      const exams = [];
+      const baseDate = new Date();
+      baseDate.setDate(baseDate.getDate() + (7 - baseDate.getDay()) % 7); // Next Sunday
+
+      for (let i = 0; i < subjects.length; i++) {
+        const date = new Date(baseDate);
+        date.setDate(baseDate.getDate() + (i % 5)); // Spread across 5 days (Sunday to Thursday)
+        const dateStr = date.toISOString().split('T')[0];
+        const period = i % 2 === 0 ? "morning" : "afternoon";
+        exams.push([`e${i+1}`, subjects[i], dateStr, period, 2, (i % 5) + 5, 2]); // between 5 and 9 halls
+      }
+      exams.forEach(e => insertExam.run(e[0], e[1], e[2], e[3], e[4], e[5], e[6]));
+
+      res.json({ success: true });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   // Clear data
   app.delete("/api/clear-all", authenticateUser, (req, res) => {

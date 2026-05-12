@@ -7,7 +7,9 @@ import { toast } from 'react-hot-toast';
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SystemSettings>({
     institutionName: 'المؤسسة التعليمية',
-    proctorRatio: 2
+    proctorRatio: 2,
+    morningTime: '08:00 - 12:00',
+    afternoonTime: '13:00 - 17:00'
   });
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
@@ -35,7 +37,17 @@ export default function SettingsPage() {
   };
 
   const seedData = async () => {
-    toast.error('هذه الميزة غير مدعومة في النسخة الحالية');
+    setSeeding(true);
+    try {
+      toast.loading('جاري إضافة البيانات التجريبية...', { id: 'seeding' });
+      await api.post('/api/seed', {});
+      toast.success('تم إضافة البيانات التجريبية بنجاح', { id: 'seeding' });
+    } catch (error: any) {
+      console.error(error);
+      toast.error('حدث خطأ أثناء إضافة البيانات', { id: 'seeding' });
+    } finally {
+      setSeeding(false);
+    }
   };
 
   const clearData = async () => {
@@ -90,6 +102,29 @@ export default function SettingsPage() {
                   <Shield className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
                 </div>
                 <p className="text-xs text-gray-400">عدد الحراس المقترح لكل قاعة اختبار</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-gray-700">توقيت الفترة الصباحية</label>
+                <input
+                  value={settings.morningTime || '08:00 - 12:00'}
+                  onChange={e => setSettings({ ...settings, morningTime: e.target.value })}
+                  className="w-full p-3.5 bg-gray-50 border border-gray-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 transition-all text-left"
+                  dir="ltr"
+                  placeholder="08:00 - 12:00"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-gray-700">توقيت الفترة المسائية</label>
+                <input
+                  value={settings.afternoonTime || '13:00 - 17:00'}
+                  onChange={e => setSettings({ ...settings, afternoonTime: e.target.value })}
+                  className="w-full p-3.5 bg-gray-50 border border-gray-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 transition-all text-left"
+                  dir="ltr"
+                  placeholder="13:00 - 17:00"
+                />
               </div>
             </div>
 

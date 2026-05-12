@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, Lock, User, Loader2, UserPlus, ShieldCheck } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { setToken, setUser, api } from '../lib/api';
@@ -14,6 +14,13 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState<'مدير' | 'ناظر'>('مدير');
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('saved_username');
+    const savedPass = localStorage.getItem('saved_password');
+    if (savedUser) setUsername(savedUser);
+    if (savedPass) setPassword(savedPass);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +47,10 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       
       setToken(data.token);
       setUser({ username: data.username, role: data.role });
+      
+      // Save login data to avoid losing credentials
+      localStorage.setItem('saved_username', username);
+      localStorage.setItem('saved_password', password);
       
       toast.success(isLogin ? 'تم تسجيل الدخول بنجاح' : 'تم إنشاء الحساب بنجاح');
       onLogin();
@@ -79,9 +90,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
           )}
 
           <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">اسم المستخدم</label>
+            <label htmlFor="username" className="block text-sm font-bold text-gray-700 mb-1">اسم المستخدم</label>
             <div className="relative">
               <input 
+                id="username"
+                name="username"
+                autoComplete="username"
                 type="text" 
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -95,9 +109,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1">كلمة السر</label>
+            <label htmlFor="password" className="block text-sm font-bold text-gray-700 mb-1">كلمة السر</label>
             <div className="relative">
               <input 
+                id="password"
+                name="password"
+                autoComplete={isLogin ? "current-password" : "new-password"}
                 type="password" 
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

@@ -29,11 +29,17 @@ export function generateAssignments(
 
     // Filter available teachers
     let candidates = teachers.filter(t => {
-      // 1. Specialty avoidance
-      if (t.specialty.toLowerCase() === exam.subject.toLowerCase()) return false;
+      // 1. Specialty avoidance (case/space tolerant and substring match)
+      const specialty = t.specialty.trim().toLowerCase();
+      const subject = exam.subject.trim().toLowerCase();
+      if (specialty === subject || subject.includes(specialty) || specialty.includes(subject)) return false;
       
       // 2. Availability exceptions (assumed format: 'YYYY-MM-DD-period')
       if (t.availabilityExceptions?.includes(currentPeriodKey)) return false;
+
+      // 3. Already assigned in this period
+      const isAssigned = assignments.some(a => a.teacherId === t.id && a.date === exam.date && a.period === exam.period);
+      if (isAssigned) return false;
 
       return true;
     });
@@ -44,8 +50,18 @@ export function generateAssignments(
       [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
     }
 
-    // Sort candidates by hours (ascending)
-    candidates.sort((a, b) => hoursMap[a.id!] - hoursMap[b.id!]);
+    // Sort candidates by hours (ascending), then by total count of assignments to further balance
+    const assignmentCountsMap = assignments.reduce((acc, a) => {
+      acc[a.teacherId] = (acc[a.teacherId] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    candidates.sort((a, b) => {
+      if (hoursMap[a.id!] !== hoursMap[b.id!]) {
+        return hoursMap[a.id!] - hoursMap[b.id!];
+      }
+      return (assignmentCountsMap[a.id!] || 0) - (assignmentCountsMap[b.id!] || 0);
+    });
 
     // Select teachers
     const selected = candidates.slice(0, requiredProctors);

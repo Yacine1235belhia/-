@@ -14,11 +14,32 @@ const headers = () => ({
   "Authorization": `Bearer ${getToken()}`
 });
 
+const handleResponse = async (res: Response) => {
+  if (res.status === 401) {
+    removeToken();
+    removeUser();
+    window.location.reload();
+  }
+  
+  if (!res.ok) {
+    const text = await res.text();
+    let errorMessage = "Request failed";
+    try {
+      const json = JSON.parse(text);
+      if (json.error) errorMessage = json.error;
+    } catch (e) {
+      if (text) errorMessage = text;
+    }
+    throw new Error(errorMessage);
+  }
+  
+  return res.json();
+};
+
 export const api = {
   get: async (url: string) => {
     const res = await fetch(url, { headers: headers() });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return handleResponse(res);
   },
   post: async (url: string, data: any) => {
     const res = await fetch(url, {
@@ -26,8 +47,7 @@ export const api = {
       headers: headers(),
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return handleResponse(res);
   },
   put: async (url: string, data: any) => {
     const res = await fetch(url, {
@@ -35,15 +55,13 @@ export const api = {
       headers: headers(),
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return handleResponse(res);
   },
   delete: async (url: string) => {
     const res = await fetch(url, {
       method: "DELETE",
       headers: headers(),
     });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return handleResponse(res);
   }
 }
