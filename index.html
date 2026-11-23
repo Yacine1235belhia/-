@@ -1,13 +1,136 @@
 <!doctype html>
-<html lang="en">
+<html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>نظام إدارة الحراسة الذكي</title>
+    <meta name="description" content="نظام متطور لتوزيع حراسة الاختبارات بشكل عادل وذكي، يضمن التوازن وتجنب تضارب التخصصات." />
+    <meta property="og:title" content="نظام إدارة الحراسة الذكي" />
+    <meta property="og:description" content="نظام متطور لتوزيع حراسة الاختبارات بشكل عادل وذكي، يضمن التوازن وتجنب تضارب التخصصات." />
+    
+    <!-- PWA & Mobile Meta Tags -->
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="حراسة" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      (function() {
+        try {
+          var savedTheme = localStorage.getItem('hirasa_theme');
+          if (savedTheme === 'light' || savedTheme === 'dark') {
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            document.documentElement.style.colorScheme = savedTheme;
+          }
+          var savedLang = localStorage.getItem('hirasa_lang');
+          if (savedLang === 'fr' || savedLang === 'en' || savedLang === 'ar') {
+            document.documentElement.setAttribute('lang', savedLang);
+            document.documentElement.setAttribute('dir', savedLang === 'ar' ? 'rtl' : 'ltr');
+          }
+        } catch (e) {}
+      })();
+      (function() {
+        // Mock WebSocket for Vite HMR in cloud iframe dev environment where HMR is disabled
+        if (typeof window !== 'undefined') {
+          const NativeWebSocket = window.WebSocket;
+          function MockViteWebSocket(url, protocols) {
+            const isViteHmr = protocols === 'vite-hmr' || protocols === 'vite-ping' || 
+              (typeof url === 'string' && (url.includes('token=') || url.includes('24678') || url.includes('/@vite')));
+            
+            if (isViteHmr) {
+              const listeners = {};
+              const mockWs = {
+                url: url,
+                readyState: 1, // WebSocket.OPEN
+                CONNECTING: 0,
+                OPEN: 1,
+                CLOSING: 2,
+                CLOSED: 3,
+                binaryType: 'blob',
+                bufferedAmount: 0,
+                extensions: '',
+                protocol: Array.isArray(protocols) ? protocols[0] : (protocols || ''),
+                onopen: null,
+                onclose: null,
+                onerror: null,
+                onmessage: null,
+                send: function() {},
+                close: function() {},
+                addEventListener: function(event, handler) {
+                  if (!listeners[event]) listeners[event] = [];
+                  listeners[event].push(handler);
+                  if (event === 'open') {
+                    setTimeout(function() {
+                      try { handler({ type: 'open', target: mockWs }); } catch(e) {}
+                    }, 0);
+                  }
+                },
+                removeEventListener: function(event, handler) {
+                  if (!listeners[event]) return;
+                  listeners[event] = listeners[event].filter(function(h) { return h !== handler; });
+                },
+                dispatchEvent: function(event) {
+                  const list = listeners[event.type];
+                  if (list) list.forEach(function(h) { h(event); });
+                  return true;
+                }
+              };
+              return mockWs;
+            }
+            return new NativeWebSocket(url, protocols);
+          }
+          if (NativeWebSocket) {
+            MockViteWebSocket.prototype = NativeWebSocket.prototype;
+            MockViteWebSocket.CONNECTING = 0;
+            MockViteWebSocket.OPEN = 1;
+            MockViteWebSocket.CLOSING = 2;
+            MockViteWebSocket.CLOSED = 3;
+          }
+          window.WebSocket = MockViteWebSocket;
+        }
+
+        // Suppress Vite HMR console.error and unhandledrejection
+        const origConsoleError = console.error;
+        console.error = function() {
+          const firstArg = arguments[0];
+          const firstArgStr = typeof firstArg === 'string' ? firstArg : (firstArg?.message || '');
+          if (firstArgStr.includes('[vite]') || firstArgStr.includes('WebSocket')) {
+            return;
+          }
+          for (let i = 0; i < arguments.length; i++) {
+            const str = String(arguments[i]?.message || arguments[i] || '');
+            if (str.includes('WebSocket') || str.includes('vite')) {
+              return;
+            }
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+
+        window.addEventListener('error', function(e) {
+          const msg = e?.message || String(e || '');
+          if (msg.includes('WebSocket') || msg.includes('vite')) {
+            if (e.preventDefault) e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          const reason = e?.reason?.message || String(e?.reason || '');
+          if (reason.includes('WebSocket') || reason.includes('vite')) {
+            if (e.preventDefault) e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

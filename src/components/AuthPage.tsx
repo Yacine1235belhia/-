@@ -26,6 +26,12 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
     e.preventDefault();
     setLoading(true);
     
+    if (!username.trim() || !password.trim()) {
+      toast.error('الرجاء إدخال اسم المستخدم وكلمة المرور');
+      setLoading(false);
+      return;
+    }
+
     if (!isLogin && password !== confirmPassword) {
       toast.error('كلمة السر غير متطابقة');
       setLoading(false);
@@ -36,14 +42,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       const endpoint = isLogin ? "/api/login" : "/api/register";
       const payload = isLogin ? { username, password } : { username, password, role };
       
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (isLogin ? "خطأ في تسجيل الدخول" : "خطأ في إنشاء الحساب"));
+      const data = await api.post(endpoint, payload);
       
       setToken(data.token);
       setUser({ username: data.username, role: data.role });
@@ -55,7 +54,7 @@ export default function AuthPage({ onLogin }: AuthPageProps) {
       toast.success(isLogin ? 'تم تسجيل الدخول بنجاح' : 'تم إنشاء الحساب بنجاح');
       onLogin();
     } catch (error: any) {
-      toast.error(error.message);
+      toast.error(error.message || "حدث خطأ غير متوقع");
     } finally {
       setLoading(false);
     }
