@@ -1,5 +1,6 @@
 import { Teacher, Exam, Hall, Assignment } from '../types';
 import { AppLanguage, translateArabicText } from '../lib/translations';
+import { buildTeacherScheduleRows, compactTimeKey } from '../lib/timings';
 
 export interface PrintSettings {
   institutionName: string;
@@ -8,6 +9,8 @@ export interface PrintSettings {
   selectedTerm: string;
   morningTime: string;
   afternoonTime: string;
+  morningSlots?: string[];
+  afternoonSlots?: string[];
   customExamTitle?: string;
   separateLevelTimings?: boolean;
 }
@@ -56,23 +59,22 @@ export function generateConvocationsHtml(
       hallName: string;
       timeRange?: string;
       levelLabel?: string;
-    }>
+    }>,
+    compactMode: boolean
   ) => {
     if (items.length === 0) return '<span style="color:#aaa;">-</span>';
-    const showTimeBadge = Boolean(settings.separateLevelTimings) || items.length > 1;
     return items
       .map((item) => {
         const isRes = item.hallName.includes('احتياط');
         const badgeStyle = isRes
           ? 'color:#b45309; background:#fef3c7; border-radius:3px; padding:1px 4px; display:inline-block;'
           : '';
-        const timeLine =
-          showTimeBadge && item.timeRange
-            ? `<div style="font-size:6.5pt; font-family:monospace; color:#334155; font-weight:700; margin-top:1px;" dir="ltr">${item.timeRange}${item.levelLabel ? ` (${item.levelLabel})` : ''}</div>`
-            : '';
+        const timeLine = item.timeRange
+          ? `<div style="font-size:${compactMode ? '6pt' : '6.8pt'}; font-family:monospace; color:#1e293b; font-weight:700; margin-top:1px;" dir="ltr">${item.timeRange}</div>`
+          : '';
         return `
           <div style="${items.length > 1 ? 'margin:2px 0; border-bottom:1px dotted #cbd5e1; padding-bottom:1px;' : ''}">
-            <div style="font-weight:800; font-size:${items.length > 1 ? '8.5pt' : '9.5pt'}; color:#000; ${badgeStyle}">${item.hallName}</div>
+            <div style="font-weight:800; font-size:${compactMode ? '8pt' : (items.length > 1 ? '8.5pt' : '9.5pt')}; color:#000; ${badgeStyle}">${item.hallName}</div>
             ${timeLine}
           </div>
         `;
@@ -85,57 +87,70 @@ export function generateConvocationsHtml(
 
     pageCards.forEach((card, idx) => {
       const isLastInPage = idx === pageCards.length - 1;
+      const scheduleRows = buildTeacherScheduleRows(
+        card.assignedSubjects,
+        settings.morningSlots && settings.morningSlots.length > 0 ? settings.morningSlots : settings.morningTime,
+        settings.afternoonSlots && settings.afternoonSlots.length > 0 ? settings.afternoonSlots : settings.afternoonTime
+      );
+      const compactMode = scheduleRows.length > 2;
+      const cellPad = compactMode ? '3px 3px' : '5px 3px';
+      const thPad = compactMode ? '4px 3px' : '5px 3px';
 
-      let morningCells = '';
-      let afternoonCells = '';
+      const bodyRowsHtml = scheduleRows.map((row) => {
+        const rowCells = card.weekDates.map((d) => {
+          const matched = card.assignedSubjects.filter((a) => {
+            if (a.date !== d || a.period !== row.period) return false;
+            if (!row.filterByTime) return true;
+            return compactTimeKey(a.timeRange) === row.timeKey;
+          });
+          return `
+            <td style="border:1.5px solid #000; padding:${cellPad}; vertical-align:middle; text-align:center; line-height:1.2;">
+              ${renderSlotItems(matched, compactMode)}
+            </td>
+          `;
+        }).join('');
 
-      card.weekDates.forEach((d) => {
-        const ms = card.assignedSubjects.filter(a => a.date === d && a.period === 'morning');
-        const afs = card.assignedSubjects.filter(a => a.date === d && a.period === 'afternoon');
-
-        morningCells += `
-          <td style="border:1.5px solid #000; padding:6px 4px; vertical-align:middle; text-align:center; line-height:1.25;">
-            ${renderSlotItems(ms)}
-          </td>
+        return `
+          <tr>
+            <td style="border:1.5px solid #000; padding:${cellPad}; background:#fafafa; font-weight:bold; font-size:${compactMode ? '7pt' : '7.5pt'}; text-align:center; vertical-align:middle; line-height:1.2;">
+              <div style="font-weight:800;">${row.label}</div>
+              <div style="font-family:monospace; font-size:${compactMode ? '5.8pt' : '6pt'}; margin-top:2px; color:#333; line-height:1.2;" dir="ltr">${row.timeRange}</div>
+            </td>
+            ${rowCells}
+          </tr>
         `;
-
-        afternoonCells += `
-          <td style="border:1.5px solid #000; padding:6px 4px; vertical-align:middle; text-align:center; line-height:1.25;">
-            ${renderSlotItems(afs)}
-          </td>
-        `;
-      });
+      }).join('');
 
       const headerDays = card.weekDates.map((d) => `
-        <th style="border:1.5px solid #000; padding:5px 3px; background:#f3f4f6; text-align:center; vertical-align:middle; line-height:1.3;">
-          <div style="font-size:8pt; font-weight:800; line-height:1.2;">${getArabicDayName(d)}</div>
-          <div style="font-size:7pt; font-family:monospace; margin-top:2px; line-height:1.1; color:#333;" dir="ltr">${d}</div>
+        <th style="border:1.5px solid #000; padding:${thPad}; background:#f3f4f6; text-align:center; vertical-align:middle; line-height:1.25;">
+          <div style="font-size:8pt; font-weight:800; line-height:1.15;">${getArabicDayName(d)}</div>
+          <div style="font-size:7pt; font-family:monospace; margin-top:1px; line-height:1.1; color:#333;" dir="ltr">${d}</div>
         </th>
       `).join('');
 
       cardsInPageHtml += `
-        <div style="height: 6.7cm; max-height: 6.7cm; padding: 0.15cm 0.3cm; border-bottom: ${isLastInPage ? 'none' : '1.5px dashed #555'}; box-sizing: border-box; overflow: hidden; page-break-inside: avoid; break-inside: avoid; display: flex; flex-direction: column; justify-content: flex-start;">
+        <div style="height: 6.7cm; max-height: 6.7cm; padding: 0.12cm 0.3cm; border-bottom: ${isLastInPage ? 'none' : '1.5px dashed #555'}; box-sizing: border-box; overflow: hidden; page-break-inside: avoid; break-inside: avoid; display: flex; flex-direction: column; justify-content: flex-start;">
           
           <!-- Top Institutional Header Table -->
-          <table style="width:100%; border-bottom:2px solid #000; border-collapse:collapse; margin-bottom:10px;">
+          <table style="width:100%; border-bottom:2px solid #000; border-collapse:collapse; margin-bottom:${compactMode ? '5px' : '8px'};">
             <tr>
-              <td style="text-align:right; font-size:8.5pt; font-weight:bold; line-height:1.6; vertical-align:bottom; padding:0 0 8px 0; border:none;">
-                <div style="margin-bottom:4px; font-weight:800; color:#000;">الجمهورية الجزائرية الديمقراطية الشعبية — وزارة التربية الوطنية</div>
+              <td style="text-align:right; font-size:8.5pt; font-weight:bold; line-height:1.5; vertical-align:bottom; padding:0 0 ${compactMode ? '4px' : '6px'} 0; border:none;">
+                <div style="margin-bottom:2px; font-weight:800; color:#000;">الجمهورية الجزائرية الديمقراطية الشعبية — وزارة التربية الوطنية</div>
                 <div style="font-weight:700; color:#111;">مديرية التربية لولاية ${settings.wilaya} | ${settings.institutionName}</div>
               </td>
-              <td style="text-align:left; font-size:8.5pt; font-weight:bold; line-height:1.6; vertical-align:bottom; padding:0 0 8px 0; border:none; white-space:nowrap; color:#000;">
+              <td style="text-align:left; font-size:8.5pt; font-weight:bold; line-height:1.5; vertical-align:bottom; padding:0 0 ${compactMode ? '4px' : '6px'} 0; border:none; white-space:nowrap; color:#000;">
                 السنة الدراسية: ${settings.schoolYear}
               </td>
             </tr>
           </table>
 
           <!-- Document Title & Teacher Name Table -->
-          <table style="width:100%; margin-bottom:5px; border-collapse:collapse;">
+          <table style="width:100%; margin-bottom:4px; border-collapse:collapse;">
             <tr>
-              <td style="text-align:right; font-size:8.5pt; font-weight:bold; line-height:1.3; vertical-align:middle; border:none; padding:0;">
+              <td style="text-align:right; font-size:8.5pt; font-weight:bold; line-height:1.25; vertical-align:middle; border:none; padding:0;">
                 استدعاء لحراسة: <span style="font-weight:800; text-decoration:underline;">${card.sessionTitle}</span>
               </td>
-              <td style="text-align:left; font-size:8.5pt; font-weight:bold; line-height:1.3; vertical-align:middle; border:none; padding:0; white-space:nowrap;">
+              <td style="text-align:left; font-size:8.5pt; font-weight:bold; line-height:1.25; vertical-align:middle; border:none; padding:0; white-space:nowrap;">
                 الأستاذ(ة): <span style="font-size:9.5pt; font-weight:800; text-decoration:underline;">${card.teacher.name}</span> (${card.teacher.specialty})
               </td>
             </tr>
@@ -145,27 +160,14 @@ export function generateConvocationsHtml(
           <table style="width:100%; border-collapse:collapse; text-align:center; font-size:7.5pt; margin:2px 0 0 0; table-layout:fixed;">
             <thead>
               <tr>
-                <th style="border:1.5px solid #000; padding:5px 3px; width:75px; background:#f3f4f6; vertical-align:middle; text-align:center; line-height:1.3;">
+                <th style="border:1.5px solid #000; padding:${thPad}; width:78px; background:#f3f4f6; vertical-align:middle; text-align:center; line-height:1.25;">
                   <div style="font-size:8pt; font-weight:800;">الفترة والتوقيت</div>
                 </th>
                 ${headerDays}
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td style="border:1.5px solid #000; padding:5px 3px; background:#fafafa; font-weight:bold; font-size:7.5pt; text-align:center; vertical-align:middle; line-height:1.3;">
-                  <div style="font-weight:800;">صباحاً</div>
-                  <div style="font-family:monospace; font-size:6pt; margin-top:2px; color:#333; line-height:1.25;" dir="auto">${settings.morningTime}</div>
-                </td>
-                ${morningCells}
-              </tr>
-              <tr>
-                <td style="border:1.5px solid #000; padding:5px 3px; background:#fafafa; font-weight:bold; font-size:7.5pt; text-align:center; vertical-align:middle; line-height:1.3;">
-                  <div style="font-weight:800;">مساءً</div>
-                  <div style="font-family:monospace; font-size:6pt; margin-top:2px; color:#333; line-height:1.25;" dir="auto">${settings.afternoonTime}</div>
-                </td>
-                ${afternoonCells}
-              </tr>
+              ${bodyRowsHtml}
             </tbody>
           </table>
 

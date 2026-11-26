@@ -31,7 +31,7 @@ const ROLE_DISPLAY: Record<SystemRoleKey, { topLabel: string; bottomLabel: strin
 };
 
 // Components
-import TeachersPage from './components/TeachersPage';
+import ClassCouncilsPage from './components/ClassCouncilsPage';
 import ExamsPage from './components/ExamsPage';
 import HallsPage from './components/HallsPage';
 import AllocationPage from './components/AllocationPage';
@@ -457,7 +457,7 @@ export default function App() {
               {activeTab === 'exams' && <ExamsPage />}
               {activeTab === 'halls' && <HallsPage />}
               {activeTab === 'dashboard' && <AllocationPage />}
-              {activeTab === 'teachers' && <TeachersPage />}
+              {activeTab === 'teachers' && <ClassCouncilsPage onGoToProctoring={() => setActiveTab('dashboard')} />}
               {activeTab === 'preferences' && <PreferencesPage />}
             </motion.div>
           </AnimatePresence>

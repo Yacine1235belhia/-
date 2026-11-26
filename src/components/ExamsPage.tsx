@@ -9,7 +9,8 @@ import {
   getLevelConfigFromSettings,
   getScheduleTimeSlotsForLevel,
   isMorningTimeRange,
-  normalizeTimeString
+  normalizeTimeString,
+  syncExamsAndScheduleWithSettings
 } from '../lib/timings';
 import { SECONDARY_SUBJECTS, ALGERIAN_STREAMS, getOfficialSubjectsForStreamName } from '../lib/constants';
 import { 
@@ -298,29 +299,36 @@ export default function ExamsPage() {
   };
 
   useEffect(() => {
-    fetchExams();
-    api.get('/api/settings').then(res => {
-      if (res) {
-        applySettingsSnapshot(res);
-        // Ensure days have per-level slots initialized if separateLevelTimings is enabled
-        if (res.separateLevelTimings || res.morningSlot1) {
-          setDays(prevDays => {
-            const needsSync = prevDays.some(d => !d.timeSlotsByLevel);
-            if (!needsSync) return prevDays;
-            const synced = prevDays.map((d, dIdx) => {
-              const built = buildDaySlotsFromSettings(res, `init_${dIdx}_${Date.now()}`);
-              return {
-                ...d,
-                timeSlots: res.separateLevelTimings ? built.timeSlotsByLevel.first : d.timeSlots,
-                timeSlotsByLevel: d.timeSlotsByLevel || built.timeSlotsByLevel
-              };
-            });
-            localStorage.setItem('hirasa_days_schedule', JSON.stringify(synced));
-            return synced;
+    let mounted = true;
+    const initExamsAndSettings = async () => {
+      try {
+        const res = await api.get('/api/settings');
+        if (res && mounted) {
+          applySettingsSnapshot(res);
+          const hasStoredDays = Boolean(localStorage.getItem('hirasa_days_schedule'));
+          await syncExamsAndScheduleWithSettings(res, {
+            syncDatesFromStart: !hasStoredDays,
           });
+          const refreshedDays = localStorage.getItem('hirasa_days_schedule');
+          if (refreshedDays && mounted) {
+            try {
+              const parsed = JSON.parse(refreshedDays);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setDays(parsed);
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (mounted) {
+          fetchExams();
         }
       }
-    }).catch(console.error);
+    };
+
+    initExamsAndSettings();
 
     const onSettingsChanged = (ev: Event) => {
       const customEv = ev as CustomEvent<SystemSettings>;
@@ -338,7 +346,10 @@ export default function ExamsPage() {
     };
 
     window.addEventListener(SETTINGS_CHANGE_EVENT, onSettingsChanged);
-    return () => window.removeEventListener(SETTINGS_CHANGE_EVENT, onSettingsChanged);
+    return () => {
+      mounted = false;
+      window.removeEventListener(SETTINGS_CHANGE_EVENT, onSettingsChanged);
+    };
   }, []);
 
   const getArabicDayName = (dateStr: string) => {
@@ -352,39 +363,29 @@ export default function ExamsPage() {
     return 'الأحد';
   };
 
-  // Recalculate days based on start date without UTC timezone bugs
+  // Recalculate days and shift exams based on start date without UTC timezone bugs
   const handleStartDateChange = async (newStartDate: string) => {
+    if (!newStartDate) return;
     setWeekStartDate(newStartDate);
-    toast.loading('جاري ربط الأيام بالتاريخ الجديد...', { id: 'date-sync' });
+    toast.loading('جاري ربط الأيام وتواريخ الاختبارات بالتاريخ الجديد...', { id: 'date-sync' });
 
     try {
+      const updatedSettings: Partial<SystemSettings> = {
+        ...(sysSettings || {}),
+        examStartDate: newStartDate,
+      };
       await api.post('/api/settings', { examStartDate: newStartDate });
-
-      const [startY, startM, startD] = newStartDate.split('-').map(Number);
-      const cur = new Date(startY, startM - 1, startD);
-      const newDays: DaySchedule[] = [];
-
-      while (newDays.length < 5) {
-        const dayOfWeek = cur.getDay();
-        if (dayOfWeek !== 5 && dayOfWeek !== 6) {
-          const formatted = formatLocalDate(cur);
-          const dayName = getArabicDayName(formatted);
-          const built = buildDaySlotsFromSettings(sysSettings, `t_${newDays.length}_${Date.now()}`);
-
-          newDays.push({
-            date: formatted,
-            dayName,
-            timeSlots: built.timeSlots,
-            timeSlotsByLevel: built.timeSlotsByLevel
-          });
-        }
-        cur.setDate(cur.getDate() + 1);
+      await syncExamsAndScheduleWithSettings(updatedSettings, { syncDatesFromStart: true });
+      const savedDays = localStorage.getItem('hirasa_days_schedule');
+      if (savedDays) {
+        try {
+          const parsed = JSON.parse(savedDays);
+          if (Array.isArray(parsed) && parsed.length > 0) setDays(parsed);
+        } catch {}
       }
-
-      setDays(newDays);
-      localStorage.setItem('hirasa_days_schedule', JSON.stringify(newDays));
+      await fetchExams();
       markWorkspaceDirty();
-      toast.success('تم ربط الأيام بالتاريخ الجديد بنجاح', { id: 'date-sync' });
+      toast.success('تم ربط الأيام وتواريخ الاختبارات بالتاريخ الجديد بنجاح', { id: 'date-sync' });
     } catch (e) {
       console.error(e);
       toast.error('خطأ في مزامنة التواريخ', { id: 'date-sync' });
@@ -790,7 +791,8 @@ export default function ExamsPage() {
   // Add Exam Modal Submit
   const handleCreateExamFormSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const formData = new FormData(form);
     const subject = (formData.get('subject') as string || '').trim();
     const date = formData.get('date') as string;
     const period = formData.get('period') as 'morning' | 'afternoon';
@@ -842,7 +844,7 @@ export default function ExamsPage() {
       setExams([...exams, newExam]);
       toast.success(`تمت إضافة وتدوين مادة (${subject}) في الخانة!`, { id: 'add-exam' });
       setIsAddExamModalOpen(false);
-      e.currentTarget.reset();
+      form.reset();
       await fetchExams();
     } catch (err) {
       console.error(err);
@@ -1059,12 +1061,21 @@ export default function ExamsPage() {
     toast.success('تم تصدير الجدول بصيغة Excel منسقة بالألوان والدمج والختم بنجاح!');
   };
 
-  // Auto Populate Standard Curriculum Timetable
+  // Auto Populate Standard Curriculum Timetable (respecting current start date & per-level timings)
   const handleAutoPopulateStandard = async () => {
     toast.loading('جاري تعبئة وكتابة الرزنامة الموحدة على الجدول...', { id: 'auto-pop' });
     try {
       await api.post('/api/exams/reset-standard', {});
-      toast.success('تم تدوين وكتابة الرزنامة الموحدة على الجدول بنجاح!', { id: 'auto-pop' });
+      const latestSettings = sysSettings || (await api.get('/api/settings').catch(() => null)) || { examStartDate: weekStartDate };
+      await syncExamsAndScheduleWithSettings(latestSettings, { syncDatesFromStart: true });
+      const savedDays = localStorage.getItem('hirasa_days_schedule');
+      if (savedDays) {
+        try {
+          const parsed = JSON.parse(savedDays);
+          if (Array.isArray(parsed) && parsed.length > 0) setDays(parsed);
+        } catch {}
+      }
+      toast.success('تم تدوين وكتابة الرزنامة الموحدة ومواءمة التوقيت والتاريخ بنجاح!', { id: 'auto-pop' });
       fetchExams();
     } catch (e) {
       toast.error('خطأ أثناء تعبئة الجدول', { id: 'auto-pop' });

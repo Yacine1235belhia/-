@@ -44,7 +44,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS halls (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    capacity INTEGER NOT NULL
+    capacity INTEGER NOT NULL,
+    proctorsCount INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS exams (
@@ -107,6 +108,7 @@ try { db.exec("ALTER TABLE students ADD COLUMN examGroupId TEXT;"); } catch(e) {
 try { db.exec("ALTER TABLE students ADD COLUMN seatNumber INTEGER;"); } catch(e) {}
 try { db.exec("ALTER TABLE teachers ADD COLUMN isExempt INTEGER DEFAULT 0;"); } catch(e) {}
 try { db.exec("ALTER TABLE teachers ADD COLUMN exemptReason TEXT DEFAULT '';"); } catch(e) {}
+try { db.exec("ALTER TABLE halls ADD COLUMN proctorsCount INTEGER;"); } catch(e) {}
 
 // Insert default an admin user if not exists
 const checkUser = db.prepare("SELECT * FROM accounts WHERE username = ?").get("admin");
@@ -339,12 +341,12 @@ async function startServer() {
     try {
       const count = Number(req.body.count) || 20;
       const capacity = Number(req.body.capacity) || 30;
-      const stmt = db.prepare("INSERT OR REPLACE INTO halls (id, name, capacity) VALUES (?, ?, ?)");
+      const stmt = db.prepare("INSERT OR REPLACE INTO halls (id, name, capacity, proctorsCount) VALUES (?, ?, ?, ?)");
       const insertMany = db.transaction(() => {
         for (let i = 1; i <= count; i++) {
           const id = `hall_${i}`;
           const name = `القاعة ${String(i).padStart(2, '0')}`;
-          stmt.run(id, name, capacity);
+          stmt.run(id, name, capacity, null);
         }
       });
       insertMany();
@@ -596,16 +598,18 @@ async function startServer() {
     }
 
     const stmt = db.prepare(`
-      INSERT INTO halls (id, name, capacity)
-      VALUES (?, ?, ?)
+      INSERT INTO halls (id, name, capacity, proctorsCount)
+      VALUES (?, ?, ?, ?)
     `);
 
     const insertMany = db.transaction((items) => {
       for (const item of items) {
+        const pCount = Number(item.proctorsCount);
         stmt.run(
           item.id || (Date.now().toString() + Math.random().toString().slice(2, 8)),
           item.name,
-          Number(item.capacity) || 30
+          Number(item.capacity) || 30,
+          Number.isFinite(pCount) && pCount >= 1 ? pCount : null
         );
       }
     });
@@ -836,7 +840,7 @@ async function startServer() {
       INSERT OR REPLACE INTO teachers (id, name, specialty, seniority, email, totalHours, availabilityExceptions, isExempt, exemptReason)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const insertHall = db.prepare("INSERT OR REPLACE INTO halls (id, name, capacity) VALUES (?, ?, ?)");
+    const insertHall = db.prepare("INSERT OR REPLACE INTO halls (id, name, capacity, proctorsCount) VALUES (?, ?, ?, ?)");
     const insertExam = db.prepare(`
       INSERT OR REPLACE INTO exams (id, subject, date, period, timeRange, duration, hallCount, proctorsPerHall, targetLevel, stream)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -881,7 +885,13 @@ async function startServer() {
         for (let i = 0; i < halls.length; i++) {
           const h = halls[i];
           if (!h || !h.name) continue;
-          insertHall.run(String(h.id || `hall_${i}`), String(h.name), Number(h.capacity) || 30);
+          const pCount = Number(h.proctorsCount);
+          insertHall.run(
+            String(h.id || `hall_${i}`),
+            String(h.name),
+            Number(h.capacity) || 30,
+            Number.isFinite(pCount) && pCount >= 1 ? pCount : null
+          );
         }
 
         for (let i = 0; i < exams.length; i++) {

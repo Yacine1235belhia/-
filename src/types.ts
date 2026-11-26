@@ -29,6 +29,7 @@ export interface Hall {
   id?: string;
   name: string;
   capacity?: number;
+  proctorsCount?: number | null;
 }
 
 export interface Assignment {

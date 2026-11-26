@@ -552,6 +552,93 @@ export const TRANSLATIONS: Record<string, TranslationPair> = {
   'مثلاً: البيض': { fr: 'Ex: El Bayadh', en: 'e.g., El Bayadh' },
   'استخراج وتوزيع الحراسة الآن': { fr: 'Générer la répartition maintenant', en: 'Generate Allocation Now' },
   'إعادة التوزيع': { fr: 'Régénérer', en: 'Re-allocate' },
+
+  // Auto-Add Teachers & Synced Settings Timings
+  'إضافة الأساتذة تلقائياً': { fr: 'Ajout automatique des enseignants', en: 'Auto-Add Teachers' },
+  'إخفاء الإضافة التلقائية': { fr: "Masquer l'ajout automatique", en: 'Hide Auto-Add' },
+  'توليد صف لكل تخصص': { fr: 'Générer une ligne par matière', en: 'Generate Row per Subject' },
+  'تجهيز قائمة نموذجية (12 أستاذ)': { fr: 'Préparer une liste modèle (12)', en: 'Fill Sample Roster (12)' },
+  'لصق واستخراج تلقائي (الاسم واللقب + مادة التخصص)': {
+    fr: 'Coller et extraire (Nom + Matière)',
+    en: 'Paste & Auto-Extract (Full Name + Subject)'
+  },
+  'التخصص الافتراضي:': { fr: 'Spécialité par défaut :', en: 'Default Subject:' },
+  'استخراج تلقائي إلى القائمة': { fr: 'Extraire vers la liste', en: 'Auto-Extract to List' },
+  'توليد صفوف تلقائية حسب مادة التخصص': {
+    fr: 'Générer des lignes par spécialité',
+    en: 'Auto-Generate Rows by Subject'
+  },
+  'العدد': { fr: 'Nombre', en: 'Count' },
+  'صف جديد': { fr: 'Nouvelle ligne', en: 'New Row' },
+  'أدخل اسم ولقب الأستاذ...': { fr: 'Nom et prénom...', en: 'Enter full name...' },
+  'استبدال القائمة الحالية بالأساتذة الجدد (يُستبعد التجريبيون تلقائياً في كل الأحوال)': {
+    fr: 'Remplacer la liste actuelle (les données démo sont toujours exclues)',
+    en: 'Replace existing list (demo teachers always excluded)'
+  },
+  'مرتبط تلقائياً بجدول الاختبارات': { fr: 'Synchronisé avec le planning', en: 'Auto-synced with Exam Schedule' },
+  'يتحدّث أول يوم وأيام الأسبوع في جدول الاختبارات مباشرةً عند تغيير هذا التاريخ.': {
+    fr: 'Les dates du planning des examens se mettent à jour automatiquement.',
+    en: 'Exam schedule dates update automatically when this date changes.'
+  },
+  'توقيت موحد': { fr: 'Horaire unifié', en: 'Unified Timing' },
+  'فصل توقيت المستويات': { fr: 'Séparer par niveau', en: 'Split by Level' },
+  'فصل: 1و2ثا (08-10) • 3ثا (10-12)': {
+    fr: 'Séparer : 1/2AS (08-10) • 3AS (10-12)',
+    en: 'Split: 1st/2nd (08-10) • 3rd (10-12)'
+  },
+  'فصل السنة 3 (10-12 + 14-16)': {
+    fr: 'Séparer 3AS (10-12 + 14-16)',
+    en: 'Split 3rd Yr (10-12 + 14-16)'
+  },
+  '08-10 فقط': { fr: '08-10 seul', en: '08-10 only' },
+  '10-12 فقط': { fr: '10-12 seul', en: '10-12 only' },
+  '08-10 و 10-12': { fr: '08-10 et 10-12', en: '08-10 & 10-12' },
+  'إغلاق نموذج الإضافة': { fr: 'Fermer le formulaire', en: 'Close Add Form' },
+  'لا يوجد أساتذة مدرجون حالياً — يمكنك إضافة أستاذ يدوياً، الإضافة تلقائياً، أو استيراد ملف إكسل': {
+    fr: 'Aucun enseignant inscrit — ajoutez-en un manuellement, automatiquement ou via Excel',
+    en: 'No teachers listed yet — add a teacher manually, auto-add, or import Excel'
+  },
+
+  // ClassCouncilsPage
+  'تنظيم وبرمجة رزنامة مجالس الأقسام لنهاية الفصل': {
+    fr: 'Organisation et planification des conseils de classe',
+    en: 'Organize and schedule end-of-term class council meetings'
+  },
+  'قائمة الأساتذة وإضافة أستاذ (ضبط الحراسة)': {
+    fr: 'Liste des enseignants & ajout (Surveillances)',
+    en: 'Teachers List & Add Teacher (Proctoring)'
+  },
+  'توليد رزنامة مقترحة': { fr: 'Générer planning proposé', en: 'Generate Suggested Schedule' },
+  'إضافة مجلس قسم': { fr: 'Ajouter conseil de classe', en: 'Add Class Council' },
+  'القسم / الشعبة *': { fr: 'Classe / Filière *', en: 'Class / Stream *' },
+  'القسم / الشعبة': { fr: 'Classe / Filière', en: 'Class / Stream' },
+  'رئيس المجلس': { fr: 'Président du conseil', en: 'Council President' },
+  'الأستاذ الرئيسي': { fr: 'Professeur principal', en: 'Head Teacher' },
+  'بحث عن قسم، قاعة، أو أستاذ...': { fr: 'Rechercher classe, salle ou enseignant...', en: 'Search class, room, or teacher...' },
+  'طباعة الرزنامة': { fr: 'Imprimer le planning', en: 'Print Schedule' },
+  'لا توجد جلسات لمجالس الأقسام حالياً': { fr: 'Aucun conseil de classe programmé', en: 'No class council sessions scheduled yet' },
+  'يمكنك إضافة جلسة مجلس قسم يدوياً أو توليد رزنامة مقترحة جاهزة لجميع الأقسام بنقرة واحدة.': {
+    fr: 'Ajoutez un conseil manuellement ou générez un planning proposé pour toutes les classes en un clic.',
+    en: 'Add a class council session manually or auto-generate a schedule for all classes in one click.'
+  },
+  'تأكيد مسح رزنامة مجالس الأقسام': { fr: 'Confirmer la suppression des conseils', en: 'Confirm Clear Class Councils' },
+  'هل تريد مسح جميع جلسات مجالس الأقسام المبرمجة حالياً؟ يمكنك إعادة توليدها لاحقاً في أي وقت.': {
+    fr: 'Voulez-vous effacer tous les conseils de classe programmés ? Vous pourrez les régénérer à tout moment.',
+    en: 'Clear all scheduled class council sessions? You can regenerate them anytime.'
+  },
+  'نعم، مسح الكل': { fr: 'Oui, tout effacer', en: 'Yes, Clear All' },
+  'تم إضافة مجلس القسم بنجاح': { fr: 'Conseil de classe ajouté avec succès', en: 'Class council added successfully' },
+  'تم تحديث موعد مجلس القسم': { fr: 'Conseil de classe mis à jour', en: 'Class council updated' },
+  'تم حذف الجلسة': { fr: 'Séance supprimée', en: 'Session deleted' },
+  'تم مسح رزنامة مجالس الأقسام': { fr: 'Planning des conseils effacé', en: 'Class councils cleared' },
+  'رزنامة مجالس الأقسام': { fr: 'Calendrier des conseils de classe', en: 'Class Councils Schedule' },
+  'توقيت ومادة الحراسة:': { fr: 'Horaire et matière de surveillance :', en: 'Proctoring Time & Exam:' },
+  'عدد الحراس:': { fr: 'Surveillants :', en: 'Proctors:' },
+  'افتراضي (2 حراس)': { fr: 'Par défaut (2 surveillants)', en: 'Default (2 proctors)' },
+  '1 حارس (حالة استثنائية)': { fr: '1 surveillant (cas exceptionnel)', en: '1 proctor (exceptional case)' },
+  '1 (حارس واحد)': { fr: '1 (un seul)', en: '1 (single)' },
+  'حارس واحد': { fr: '1 surveillant', en: '1 proctor' },
+  'خطأ في تحديث عدد الحراس': { fr: 'Erreur lors de la mise à jour des surveillants', en: 'Error updating proctor count' },
 };
 
 // Fragment translations for JSX interpolated text nodes (e.g. `1. قاعات الامتحان ({count})`)

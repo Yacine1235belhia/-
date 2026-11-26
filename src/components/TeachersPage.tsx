@@ -2,12 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../lib/api';
 import { Teacher, Exam } from '../types';
 import { SECONDARY_SUBJECTS, isDemoTeacher } from '../lib/constants';
-import { UserPlus, Trash2, Edit2, Search, FileUp, FileDown, Printer, Download, Users, AlertCircle, UserX, UserCheck, Ban, CheckCircle2, X } from 'lucide-react';
+import { UserPlus, Trash2, Edit2, Search, FileUp, FileDown, Printer, Download, Users, AlertCircle, UserX, UserCheck, Ban, CheckCircle2, X, Sparkles } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { printHtmlDirectly } from '../utils/printHelpers';
 import ExcelImportModal from './ExcelImportModal';
+import AutoAddTeachersPanel from './AutoAddTeachersPanel';
 
 const parseExemptFromExcel = (statusVal: any, reasonVal: any): { isExempt: boolean; exemptReason: string } => {
   const statusStr = String(statusVal ?? '').trim().toLowerCase();
@@ -35,6 +36,7 @@ export default function TeachersPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [showAutoAddPanel, setShowAutoAddPanel] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [selectedExceptions, setSelectedExceptions] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'exempt'>('all');
@@ -87,7 +89,8 @@ export default function TeachersPage() {
 
   const handleAddTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const formData = new FormData(form);
     const teacherData = {
       name: formData.get('name') as string,
       specialty: formData.get('specialty') as string,
@@ -111,7 +114,7 @@ export default function TeachersPage() {
       setSelectedExceptions([]);
       setFormIsExempt(false);
       setFormExemptReason('');
-      e.currentTarget.reset();
+      form.reset();
       fetchLists();
     } catch (error) {
       toast.error('حدث خطأ أثناء الحفظ');
@@ -556,7 +559,23 @@ export default function TeachersPage() {
             </button>
 
             <button 
-              onClick={() => { setEditingTeacher(null); setShowForm(!showForm); }}
+              onClick={() => {
+                setEditingTeacher(null);
+                setShowForm(false);
+                setShowAutoAddPanel(!showAutoAddPanel);
+              }}
+              className={`flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl transition-colors font-black shadow-lg text-xs cursor-pointer border ${
+                showAutoAddPanel
+                  ? 'bg-cyan-600 text-white border-cyan-400 shadow-cyan-500/20'
+                  : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/25'
+              }`}
+            >
+              <Sparkles size={15} />
+              <span>{showAutoAddPanel ? 'إخفاء الإضافة التلقائية' : 'إضافة الأساتذة تلقائياً'}</span>
+            </button>
+
+            <button 
+              onClick={() => { setShowAutoAddPanel(false); setEditingTeacher(null); setShowForm(!showForm); }}
               className="flex items-center justify-center gap-1.5 bg-[#0099FF] text-white px-4 py-2.5 rounded-xl hover:bg-sky-500 transition-colors font-black shadow-lg shadow-sky-500/20 text-xs cursor-pointer"
             >
               <UserPlus size={15} />
@@ -564,6 +583,23 @@ export default function TeachersPage() {
             </button>
           </div>
         </div>
+
+        <AnimatePresence>
+          {showAutoAddPanel && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden"
+            >
+              <AutoAddTeachersPanel
+                existingNames={teachers.map(t => t.name)}
+                onSuccess={fetchLists}
+                onClose={() => setShowAutoAddPanel(false)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {(showForm || editingTeacher) && (

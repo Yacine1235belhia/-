@@ -141,12 +141,16 @@ export function generateAssignments(
     const normalExams = periodExams.filter(e => !isEngSubject(e.subject) && !isLangSubject(e.subject));
 
     let currentHallIdx = 0;
+    const resolveHallProctorCount = (hall: Hall | undefined, fallbackCount: number): number => {
+      const custom = Number(hall?.proctorsCount);
+      return Number.isFinite(custom) && custom >= 1 ? custom : fallbackCount;
+    };
 
     // A. Merged Engineering Duty Positions (All merged engineering exams in 1 hall)
     if (engExams.length > 0) {
       const mainEng = engExams[0];
-      const countProctors = mainEng.proctorsPerHall || proctorsPerHall;
       const targetHall = halls[currentHallIdx % halls.length] || halls[0];
+      const countProctors = resolveHallProctorCount(targetHall, mainEng.proctorsPerHall || proctorsPerHall);
       currentHallIdx++;
       const duration = Math.max(...engExams.map(e => e.duration || 2));
 
@@ -167,8 +171,8 @@ export function generateAssignments(
     // B. Merged Foreign Languages Duty Positions (All merged language exams in 1 hall)
     if (langExams.length > 0) {
       const mainLang = langExams[0];
-      const countProctors = mainLang.proctorsPerHall || proctorsPerHall;
       const targetHall = halls[currentHallIdx % halls.length] || halls[0];
+      const countProctors = resolveHallProctorCount(targetHall, mainLang.proctorsPerHall || proctorsPerHall);
       currentHallIdx++;
       const duration = Math.max(...langExams.map(e => e.duration || 2));
 
@@ -189,11 +193,12 @@ export function generateAssignments(
     // C. Normal Exams Duty Positions
     normalExams.forEach(ex => {
       const numHalls = ex.hallCount || 1;
-      const numProctors = ex.proctorsPerHall || proctorsPerHall;
+      const defaultNumProctors = ex.proctorsPerHall || proctorsPerHall;
       const duration = ex.duration || 2;
 
       for (let h = 0; h < numHalls; h++) {
         const targetHall = halls[currentHallIdx % halls.length] || halls[0];
+        const numProctors = resolveHallProctorCount(targetHall, defaultNumProctors);
         currentHallIdx++;
 
         for (let p = 0; p < numProctors; p++) {

@@ -281,59 +281,350 @@ export function resolveProctoringPeriodHeaders(
   };
 }
 
+export interface TeacherScheduleRow {
+  key: string;
+  period: 'morning' | 'afternoon';
+  label: string;
+  timeRange: string;
+  timeKey: string;
+  filterByTime: boolean;
+}
+
+function sortUniqueTimeRanges(ranges: string[]): Array<[string, string]> {
+  const uniqueByKey = new Map<string, string>();
+  ranges.forEach(raw => {
+    const normalized = normalizeTimeString(raw);
+    const key = compactTimeKey(normalized);
+    if (normalized && key && !uniqueByKey.has(key)) {
+      uniqueByKey.set(key, normalized);
+    }
+  });
+
+  return Array.from(uniqueByKey.entries()).sort((a, b) => {
+    const pA = parseTimeRangeToMinutes(a[1]);
+    const pB = parseTimeRangeToMinutes(b[1]);
+    if (pA && pB) {
+      if (pA.start !== pB.start) return pA.start - pB.start;
+      return pA.end - pB.end;
+    }
+    return a[1].localeCompare(b[1]);
+  });
+}
+
+export function resolveSessionSlotLists(
+  session: 'all' | 'first_second' | 'first' | 'second' | 'third',
+  settings: Partial<SystemSettings> | null | undefined,
+  sessionExams: Exam[] = []
+): { morningSlots: string[]; afternoonSlots: string[] } {
+  const c1 = getLevelConfigFromSettings(settings, 'first');
+
+  if (!settings?.separateLevelTimings) {
+    return {
+      morningSlots: [c1.morningTime || '08:00 - 12:00'],
+      afternoonSlots: [c1.afternoonTime || '13:00 - 17:00'],
+    };
+  }
+
+  const targetLevels: LevelKey[] =
+    session === 'first'
+      ? ['first']
+      : session === 'second'
+      ? ['second']
+      : session === 'third'
+      ? ['third']
+      : session === 'first_second'
+      ? ['first', 'second']
+      : ['first', 'second', 'third'];
+
+  const examMorning: string[] = [];
+  const examAfternoon: string[] = [];
+  sessionExams.forEach(ex => {
+    const eff = resolveExamEffectiveTimeRange(ex, settings);
+    if (!eff) return;
+    if (ex.period === 'afternoon') {
+      examAfternoon.push(eff);
+    } else {
+      examMorning.push(eff);
+    }
+  });
+
+  const cfgMorning: string[] = [];
+  const cfgAfternoon: string[] = [];
+  targetLevels.forEach(lvl => {
+    const cfg = getLevelConfigFromSettings(settings, lvl);
+    if (cfg.morningSlot1?.trim()) cfgMorning.push(cfg.morningSlot1);
+    if (cfg.morningSlot2?.trim()) cfgMorning.push(cfg.morningSlot2);
+    if (!cfg.morningSlot1?.trim() && !cfg.morningSlot2?.trim() && cfg.morningTime?.trim()) {
+      cfgMorning.push(cfg.morningTime);
+    }
+    if (cfg.includeAfternoon && cfg.afternoonSlot?.trim()) {
+      cfgAfternoon.push(cfg.afternoonSlot);
+    } else if (cfg.afternoonTime?.trim()) {
+      cfgAfternoon.push(cfg.afternoonTime);
+    }
+  });
+
+  const morningSource = examMorning.length > 0 ? examMorning : cfgMorning;
+  const afternoonSource = examAfternoon.length > 0 ? examAfternoon : cfgAfternoon;
+
+  const morningSlots = sortUniqueTimeRanges(morningSource).map(([, tr]) => tr);
+  const afternoonSlots = sortUniqueTimeRanges(afternoonSource).map(([, tr]) => tr);
+
+  return {
+    morningSlots: morningSlots.length > 0 ? morningSlots : [c1.morningTime || '08:00 - 12:00'],
+    afternoonSlots: afternoonSlots.length > 0 ? afternoonSlots : [c1.afternoonTime || '13:00 - 17:00'],
+  };
+}
+
+export function buildTeacherScheduleRows(
+  items: Array<{ period: string; timeRange?: string }>,
+  defaultMorningTime: string | string[],
+  defaultAfternoonTime: string | string[]
+): TeacherScheduleRow[] {
+  const collectPeriodRows = (
+    period: 'morning' | 'afternoon',
+    label: string,
+    baseSlots: string | string[],
+    fallback: string
+  ): TeacherScheduleRow[] => {
+    const periodItems = items.filter(i => i.period === period);
+    const seedSlots = Array.isArray(baseSlots)
+      ? baseSlots
+      : baseSlots.includes('|')
+      ? []
+      : [baseSlots];
+
+    const combinedRanges = [
+      ...seedSlots,
+      ...periodItems.map(i => i.timeRange || ''),
+    ].filter(Boolean);
+
+    const sortedTimes = sortUniqueTimeRanges(combinedRanges);
+
+    if (sortedTimes.length >= 2) {
+      return sortedTimes.map(([timeKey, timeRange]) => ({
+        key: `${period}_${timeKey}`,
+        period,
+        label,
+        timeRange,
+        timeKey,
+        filterByTime: true,
+      }));
+    }
+
+    if (sortedTimes.length === 1) {
+      const [timeKey, timeRange] = sortedTimes[0];
+      return [{
+        key: `${period}_${timeKey}`,
+        period,
+        label,
+        timeRange,
+        timeKey,
+        filterByTime: false,
+      }];
+    }
+
+    return [{
+      key: `${period}_default`,
+      period,
+      label,
+      timeRange: normalizeTimeString(fallback),
+      timeKey: '',
+      filterByTime: false,
+    }];
+  };
+
+  return [
+    ...collectPeriodRows('morning', 'صباحي', defaultMorningTime, '08:00 - 12:00'),
+    ...collectPeriodRows('afternoon', 'مسائي', defaultAfternoonTime, '13:00 - 17:00'),
+  ];
+}
+
+export function getArabicDayName(dateStr: string): string {
+  if (!dateStr) return 'الأحد';
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length === 3 && !parts.some(isNaN)) {
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
+    const daysArr = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    return daysArr[date.getDay()];
+  }
+  return 'الأحد';
+}
+
+export function formatLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export interface ScheduleTimeSlot {
+  id: string;
+  timeRange: string;
+}
+
+export interface ScheduleDayItem {
+  date: string;
+  dayName: string;
+  timeSlots: ScheduleTimeSlot[];
+  timeSlotsByLevel?: Partial<Record<LevelKey, ScheduleTimeSlot[]>>;
+}
+
+export function buildTimeSlotsForDay(
+  settingsObj: Partial<SystemSettings> | null | undefined,
+  prefix: string
+): { timeSlots: ScheduleTimeSlot[]; timeSlotsByLevel: Record<LevelKey, ScheduleTimeSlot[]> } {
+  const unifiedSlots = getScheduleTimeSlotsForLevel(
+    { ...(settingsObj || {}), separateLevelTimings: false },
+    'first'
+  ).map((tr, idx) => ({ id: `${prefix}_u_${idx}`, timeRange: tr }));
+
+  const timeSlotsByLevel: Record<LevelKey, ScheduleTimeSlot[]> = {
+    first: getScheduleTimeSlotsForLevel(settingsObj, 'first').map((tr, idx) => ({
+      id: `${prefix}_1_${idx}`,
+      timeRange: tr,
+    })),
+    second: getScheduleTimeSlotsForLevel(settingsObj, 'second').map((tr, idx) => ({
+      id: `${prefix}_2_${idx}`,
+      timeRange: tr,
+    })),
+    third: getScheduleTimeSlotsForLevel(settingsObj, 'third').map((tr, idx) => ({
+      id: `${prefix}_3_${idx}`,
+      timeRange: tr,
+    })),
+  };
+
+  return {
+    timeSlots: settingsObj?.separateLevelTimings ? timeSlotsByLevel.first : unifiedSlots,
+    timeSlotsByLevel,
+  };
+}
+
+export function buildWorkingDaysFromStartDate(
+  startDateStr: string,
+  settingsObj: Partial<SystemSettings> | null | undefined,
+  options?: { count?: number; endDateStr?: string }
+): ScheduleDayItem[] {
+  const parts = (startDateStr || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return [];
+
+  const cur = new Date(parts[0], parts[1] - 1, parts[2]);
+  const days: ScheduleDayItem[] = [];
+  const targetCount = Math.max(1, Math.min(14, options?.count || 5));
+
+  let endTime: number | null = null;
+  if (options?.endDateStr) {
+    const eParts = options.endDateStr.split('-').map(Number);
+    if (eParts.length === 3 && !eParts.some(isNaN)) {
+      const endD = new Date(eParts[0], eParts[1] - 1, eParts[2]);
+      if (endD.getTime() >= cur.getTime()) {
+        endTime = endD.getTime();
+      }
+    }
+  }
+
+  let guard = 0;
+  while (guard < 45) {
+    guard++;
+    const dow = cur.getDay();
+    if (dow !== 5 && dow !== 6) {
+      const formatted = formatLocalDateStr(cur);
+      const built = buildTimeSlotsForDay(settingsObj, `t_${days.length}_${Date.now()}`);
+      days.push({
+        date: formatted,
+        dayName: getArabicDayName(formatted),
+        timeSlots: built.timeSlots,
+        timeSlotsByLevel: built.timeSlotsByLevel,
+      });
+    }
+    if (endTime !== null) {
+      if (cur.getTime() >= endTime || days.length >= 14) break;
+    } else if (days.length >= targetCount) {
+      break;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return days;
+}
+
 /**
- * Synchronize existing exams and local days schedule whenever timings change in SettingsPage.
+ * Synchronize existing exams and local days schedule whenever timings or start date change in SettingsPage.
  */
-export async function syncExamsAndScheduleWithSettings(nextSettings: Partial<SystemSettings>): Promise<number> {
+export async function syncExamsAndScheduleWithSettings(
+  nextSettings: Partial<SystemSettings>,
+  options?: { syncDatesFromStart?: boolean }
+): Promise<number> {
   let updatedCount = 0;
+  const oldDateToNewDate = new Map<string, string>();
 
   try {
-    // 1. Update localStorage hirasa_days_schedule to hold per-level timeSlots + unified timeSlots
+    // 1. Load or initialize localStorage hirasa_days_schedule
+    let existingDays: ScheduleDayItem[] = [];
     const rawDays = localStorage.getItem('hirasa_days_schedule');
     if (rawDays) {
       try {
-        const parsedDays = JSON.parse(rawDays);
-        if (Array.isArray(parsedDays) && parsedDays.length > 0) {
-          const updatedDays = parsedDays.map((day: any, dIdx: number) => {
-            const unifiedSlots = getScheduleTimeSlotsForLevel(
-              { ...nextSettings, separateLevelTimings: false },
-              'first'
-            ).map((tr, sIdx) => ({
-              id: `t_${dIdx}_${sIdx}_${Date.now()}`,
-              timeRange: tr,
-            }));
-
-            const timeSlotsByLevel = {
-              first: getScheduleTimeSlotsForLevel(nextSettings, 'first').map((tr, sIdx) => ({
-                id: `t_${dIdx}_1_${sIdx}_${Date.now()}`,
-                timeRange: tr,
-              })),
-              second: getScheduleTimeSlotsForLevel(nextSettings, 'second').map((tr, sIdx) => ({
-                id: `t_${dIdx}_2_${sIdx}_${Date.now()}`,
-                timeRange: tr,
-              })),
-              third: getScheduleTimeSlotsForLevel(nextSettings, 'third').map((tr, sIdx) => ({
-                id: `t_${dIdx}_3_${sIdx}_${Date.now()}`,
-                timeRange: tr,
-              })),
-            };
-
-            return {
-              ...day,
-              timeSlots: nextSettings.separateLevelTimings ? timeSlotsByLevel.first : unifiedSlots,
-              timeSlotsByLevel,
-            };
-          });
-          localStorage.setItem('hirasa_days_schedule', JSON.stringify(updatedDays));
+        const parsed = JSON.parse(rawDays);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          existingDays = parsed;
         }
       } catch {
         // Ignore malformed local schedule
       }
     }
 
-    // 2. Sync existing exams' timeRange to match the level's configured schedule
+    const startDate = (nextSettings.examStartDate || '').trim();
+    const shouldSyncDates =
+      Boolean(startDate) &&
+      (options?.syncDatesFromStart === true ||
+        existingDays.length === 0 ||
+        (options?.syncDatesFromStart !== false && existingDays[0]?.date !== startDate));
+
+    let baseDays: ScheduleDayItem[] = existingDays;
+
+    if (shouldSyncDates && startDate) {
+      const generatedDays = buildWorkingDaysFromStartDate(startDate, nextSettings, {
+        count: existingDays.length > 0 ? existingDays.length : 5,
+        endDateStr: nextSettings.examEndDate,
+      });
+      if (generatedDays.length > 0) {
+        existingDays.forEach((oldDay, idx) => {
+          if (oldDay?.date && generatedDays[idx]?.date && oldDay.date !== generatedDays[idx].date) {
+            oldDateToNewDate.set(oldDay.date.trim(), generatedDays[idx].date.trim());
+          }
+        });
+        baseDays = generatedDays;
+      }
+    }
+
+    if (baseDays.length > 0) {
+      const updatedDays = baseDays.map((day, dIdx) => {
+        const built = buildTimeSlotsForDay(nextSettings, `t_${dIdx}_${Date.now()}`);
+        return {
+          ...day,
+          dayName: day.dayName || getArabicDayName(day.date),
+          timeSlots: built.timeSlots,
+          timeSlotsByLevel: built.timeSlotsByLevel,
+        };
+      });
+      localStorage.setItem('hirasa_days_schedule', JSON.stringify(updatedDays));
+    }
+
+    // 2. Sync existing exams' dates and timeRange to match the configured start date & per-level schedule
     const allExams = await api.get('/api/exams');
     if (Array.isArray(allExams) && allExams.length > 0) {
+      // Fallback date mapping if existingDays was missing previously
+      if (shouldSyncDates && oldDateToNewDate.size === 0 && baseDays.length > 0) {
+        const uniqueOldDates = Array.from(
+          new Set((allExams as Exam[]).map(e => (e?.date || '').trim()).filter(Boolean))
+        ).sort();
+        uniqueOldDates.forEach((oldD, idx) => {
+          if (baseDays[idx]?.date && oldD !== baseDays[idx].date) {
+            oldDateToNewDate.set(oldD, baseDays[idx].date);
+          }
+        });
+      }
+
       const updatedExams: Exam[] = [];
 
       for (const ex of allExams as Exam[]) {
@@ -341,6 +632,9 @@ export async function syncExamsAndScheduleWithSettings(nextSettings: Partial<Sys
           updatedExams.push(ex);
           continue;
         }
+
+        const trimmedDate = (ex.date || '').trim();
+        const targetDate = oldDateToNewDate.get(trimmedDate) || trimmedDate;
 
         const lvl = resolveExamLevelKey(ex);
         const cfg = getLevelConfigFromSettings(nextSettings, lvl);
@@ -360,7 +654,6 @@ export async function syncExamsAndScheduleWithSettings(nextSettings: Partial<Sys
             if (morningSlots.length === 1) {
               targetTimeRange = morningSlots[0];
             } else {
-              // Heuristic: if old start hour >= 10, map to slot 2, else slot 1
               const parsedOld = parseTimeRangeToMinutes(targetTimeRange);
               targetTimeRange =
                 parsedOld && parsedOld.start >= 10 * 60 ? morningSlots[1] : morningSlots[0];
@@ -373,8 +666,16 @@ export async function syncExamsAndScheduleWithSettings(nextSettings: Partial<Sys
           }
         }
 
-        if (targetTimeRange && compactTimeKey(targetTimeRange) !== compactTimeKey(ex.timeRange)) {
-          const nextEx: Exam = { ...ex, timeRange: targetTimeRange };
+        const dateChanged = Boolean(targetDate) && targetDate !== trimmedDate;
+        const timeChanged =
+          Boolean(targetTimeRange) && compactTimeKey(targetTimeRange) !== compactTimeKey(ex.timeRange);
+
+        if (dateChanged || timeChanged) {
+          const nextEx: Exam = {
+            ...ex,
+            date: targetDate || ex.date,
+            timeRange: targetTimeRange || ex.timeRange,
+          };
           updatedExams.push(nextEx);
           updatedCount++;
           await api.put(`/api/exams/${ex.id}`, nextEx).catch(() => {});

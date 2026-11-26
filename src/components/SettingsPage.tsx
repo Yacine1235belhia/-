@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { LevelKey, LevelTimingConfig, SystemSettings } from '../types';
 import {
@@ -8,7 +8,7 @@ import {
 } from '../lib/timings';
 import {
   Save, Building2, Calendar, Shield, Database, AlertCircle, UserCheck,
-  Clock, Layers, Sparkles, RefreshCw
+  Clock, Layers, Sparkles, RefreshCw, CheckCircle2
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
@@ -36,6 +36,31 @@ export default function SettingsPage() {
   const [seeding, setSeeding] = useState(false);
   const [syncingTimings, setSyncingTimings] = useState(false);
   const [baladiya, setBaladiya] = useState('البيض');
+
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSyncRef = useRef(false);
+  const latestStateRef = useRef<{ settings: SystemSettings; baladiya: string; activeRole: 'manager' | 'principal' | 'advisor' }>({
+    settings,
+    baladiya,
+    activeRole,
+  });
+
+  useEffect(() => {
+    latestStateRef.current = { settings, baladiya, activeRole };
+  }, [settings, baladiya, activeRole]);
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+      }
+      if (pendingSyncRef.current) {
+        const snap = latestStateRef.current;
+        api.post('/api/settings', { ...snap.settings, baladiya: snap.baladiya, activeRole: snap.activeRole }).catch(() => {});
+        syncExamsAndScheduleWithSettings(snap.settings).catch(() => {});
+      }
+    };
+  }, []);
 
   useEffect(() => {
     api.get('/api/settings').then((data) => {
@@ -71,12 +96,46 @@ export default function SettingsPage() {
     api.post('/api/settings', { ...nextSettings, baladiya, activeRole }).catch(() => {});
   };
 
-  const persistAndSyncTimings = async (nextSettings: SystemSettings, message?: string) => {
+  const scheduleAutoSyncTimings = (nextSettings: SystemSettings, syncDates = false) => {
+    pendingSyncRef.current = true;
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+    }
+    syncTimerRef.current = setTimeout(async () => {
+      pendingSyncRef.current = false;
+      try {
+        await syncExamsAndScheduleWithSettings(nextSettings, syncDates ? { syncDatesFromStart: true } : undefined);
+      } catch {
+        // Silent background sync
+      }
+    }, 350);
+  };
+
+  const flushImmediateTimingSync = async (targetSettings: SystemSettings, syncDates = false) => {
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+    pendingSyncRef.current = false;
+    await api.post('/api/settings', { ...targetSettings, baladiya, activeRole }).catch(() => {});
+    await syncExamsAndScheduleWithSettings(targetSettings, syncDates ? { syncDatesFromStart: true } : undefined);
+  };
+
+  const persistAndSyncTimings = async (
+    nextSettings: SystemSettings,
+    message?: string,
+    options?: { syncDatesFromStart?: boolean }
+  ) => {
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+    pendingSyncRef.current = false;
     setSyncingTimings(true);
     try {
       setSettings(nextSettings);
       await api.post('/api/settings', { ...nextSettings, baladiya, activeRole });
-      const updatedExamsCount = await syncExamsAndScheduleWithSettings(nextSettings);
+      const updatedExamsCount = await syncExamsAndScheduleWithSettings(nextSettings, options);
       if (message) {
         toast.success(
           updatedExamsCount > 0
@@ -89,6 +148,21 @@ export default function SettingsPage() {
       toast.error('تعذر مزامنة التوقيتات', { id: 'timings-sync' });
     } finally {
       setSyncingTimings(false);
+    }
+  };
+
+  const handleExamDateChange = (field: 'examStartDate' | 'examEndDate', value: string) => {
+    const nextSettings: SystemSettings = { ...settings, [field]: value };
+    setSettings(nextSettings);
+    api.post('/api/settings', { ...nextSettings, baladiya, activeRole }).catch(() => {});
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      persistAndSyncTimings(
+        nextSettings,
+        field === 'examStartDate'
+          ? 'تم ربط تاريخ بداية الاختبارات بجدول الاختبارات تلقائياً'
+          : 'تم ربط تاريخ نهاية الاختبارات بجدول الاختبارات تلقائياً',
+        { syncDatesFromStart: true }
+      );
     }
   };
 
@@ -112,7 +186,7 @@ export default function SettingsPage() {
     );
   };
 
-  const handleApplySplitPreset = (preset: 'split_morning' | 'standard_two_slots') => {
+  const handleApplySplitPreset = (preset: 'split_morning' | 'split_afternoon' | 'standard_two_slots') => {
     const nextLevels =
       preset === 'split_morning'
         ? {
@@ -141,6 +215,33 @@ export default function SettingsPage() {
               afternoonTime: '15:30 - 17:30',
             },
           }
+        : preset === 'split_afternoon'
+        ? {
+            first: {
+              morningSlot1: '08:00 - 10:00',
+              morningSlot2: '10:00 - 12:00',
+              includeAfternoon: false,
+              afternoonSlot: '13:30 - 15:30',
+              morningTime: '08:00 - 12:00',
+              afternoonTime: '13:30 - 15:30',
+            },
+            second: {
+              morningSlot1: '08:00 - 10:00',
+              morningSlot2: '10:00 - 12:00',
+              includeAfternoon: false,
+              afternoonSlot: '13:30 - 15:30',
+              morningTime: '08:00 - 12:00',
+              afternoonTime: '13:30 - 15:30',
+            },
+            third: {
+              morningSlot1: '10:00 - 12:00',
+              morningSlot2: '',
+              includeAfternoon: true,
+              afternoonSlot: '14:00 - 16:00',
+              morningTime: '10:00 - 12:00',
+              afternoonTime: '14:00 - 16:00',
+            },
+          }
         : createDefaultLevelTimings();
 
     const nextSettings: SystemSettings = {
@@ -152,9 +253,26 @@ export default function SettingsPage() {
     persistAndSyncTimings(
       nextSettings,
       preset === 'split_morning'
-        ? 'تم تطبيق توقيت 08:00-10:00 للسنوات 1و2 و 10:00-12:00 للسنة 3 في الاختبارات والحراسة'
+        ? 'تم تطبيق توقيت 08:00 - 10:00 للسنوات 1 و 2 و 10:00 - 12:00 للسنة 3 في الاختبارات والحراسة'
+        : preset === 'split_afternoon'
+        ? 'تم فصل توقيت السنة 3 (صباحي 10:00-12:00 + مسائي 14:00-16:00) وربطه بالجدول'
         : 'تم ضبط التوقيت القياسي (حصتين صباحاً) لكل مستوى'
     );
+  };
+
+  const handleQuickLevelSlotPreset = (level: LevelKey, slot1: string, slot2 = '') => {
+    const currentLevels = settings.levelTimings || createDefaultLevelTimings();
+    const cur = { ...currentLevels[level], morningSlot1: slot1, morningSlot2: slot2 };
+    cur.morningTime = deriveMorningPeriodFromSlots(slot1, slot2, cur.morningTime || '08:00 - 12:00');
+    const nextSettings: SystemSettings = {
+      ...settings,
+      separateLevelTimings: true,
+      levelTimings: {
+        ...currentLevels,
+        [level]: cur,
+      },
+    };
+    persistAndSyncTimings(nextSettings, 'تم تحديث توقيت المستوى وربطه بجدول الاختبارات تلقائياً');
   };
 
   const handleUnifiedTimingField = (
@@ -173,6 +291,7 @@ export default function SettingsPage() {
       updated.afternoonTime = value.trim();
     }
     updateAndAutoPersist(updated);
+    scheduleAutoSyncTimings(updated);
   };
 
   const handleLevelTimingField = (
@@ -194,12 +313,14 @@ export default function SettingsPage() {
     }
     const nextSettings: SystemSettings = {
       ...settings,
+      separateLevelTimings: true,
       levelTimings: {
         ...currentLevels,
         [level]: cur,
       },
     };
     updateAndAutoPersist(nextSettings);
+    scheduleAutoSyncTimings(nextSettings);
   };
 
   const handleRoleSelect = (roleId: 'manager' | 'principal' | 'advisor') => {
@@ -210,11 +331,16 @@ export default function SettingsPage() {
 
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+    pendingSyncRef.current = false;
     try {
       await api.post('/api/settings', { ...settings, baladiya, activeRole });
-      await syncExamsAndScheduleWithSettings(settings);
+      await syncExamsAndScheduleWithSettings(settings, { syncDatesFromStart: true });
       window.dispatchEvent(new CustomEvent('hirasa:role-change', { detail: activeRole }));
-      toast.success('تم حفظ معلومات المؤسسة ومزامنة توقيت الاختبارات والحراسة بنجاح');
+      toast.success('تم حفظ معلومات المؤسسة ومزامنة التواريخ وتوقيت الاختبارات والحراسة بنجاح');
     } catch (error) {
       toast.error('حدث خطأ أثناء الحفظ');
     }
@@ -401,10 +527,16 @@ export default function SettingsPage() {
 
           {/* Exam Schedule Configuration Card */}
           <div className="p-6 bg-[#121E36] rounded-2xl border border-slate-700/60 space-y-6">
-            <h4 className="text-sm font-bold text-sky-400 flex items-center gap-2">
-              <Calendar size={18} />
-              تواريخ بداية ونهاية الاختبارات والسنوات المعنية
-            </h4>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h4 className="text-sm font-bold text-sky-400 flex items-center gap-2">
+                <Calendar size={18} />
+                تواريخ بداية ونهاية الاختبارات والسنوات المعنية
+              </h4>
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-full w-fit">
+                <CheckCircle2 size={13} />
+                <span>مرتبط تلقائياً بجدول الاختبارات</span>
+              </span>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
@@ -412,9 +544,12 @@ export default function SettingsPage() {
                 <input
                   type="date"
                   value={settings.examStartDate || ''}
-                  onChange={e => setSettings({ ...settings, examStartDate: e.target.value })}
+                  onChange={e => handleExamDateChange('examStartDate', e.target.value)}
                   className="w-full p-3.5 bg-[#182643] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-sm font-mono font-bold"
                 />
+                <p className="text-[11px] text-slate-400">
+                  يتحدّث أول يوم وأيام الأسبوع في جدول الاختبارات مباشرةً عند تغيير هذا التاريخ.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -422,7 +557,7 @@ export default function SettingsPage() {
                 <input
                   type="date"
                   value={settings.examEndDate || ''}
-                  onChange={e => setSettings({ ...settings, examEndDate: e.target.value })}
+                  onChange={e => handleExamDateChange('examEndDate', e.target.value)}
                   className="w-full p-3.5 bg-[#182643] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-sm font-mono font-bold"
                 />
               </div>
@@ -485,33 +620,42 @@ export default function SettingsPage() {
                     </span>
                   </h4>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    يرتبط التوقيت المحدد هنا مباشرةً بخانات <strong className="text-slate-200">جدول الاختبارات</strong> و<strong className="text-slate-200">جدول الحراسة والاستدعاءات</strong>.
+                    يرتبط التوقيت المحدد هنا تلقائياً ومباشرةً بخانات <strong className="text-slate-200">جدول الاختبارات</strong> و<strong className="text-slate-200">جدول الحراسة والاستدعاءات</strong>.
                   </p>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleToggleSeparateTimings(!settings.separateLevelTimings)}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border ${
-                    settings.separateLevelTimings
-                      ? 'bg-purple-600 hover:bg-purple-500 text-white border-purple-400 shadow-lg shadow-purple-500/20'
-                      : 'bg-[#182643] hover:bg-[#1E2F52] text-cyan-300 border-cyan-500/40'
-                  }`}
-                >
-                  <Layers size={15} />
-                  <span>
-                    {settings.separateLevelTimings
-                      ? 'فصل توقيت المستويات: مفعّل ✓'
-                      : 'تفعيل فصل توقيت الاختبارات للمستويات'}
-                  </span>
-                </button>
+                <div className="inline-flex bg-[#091021] p-1 rounded-xl border border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSeparateTimings(false)}
+                    className={`px-3 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      !settings.separateLevelTimings
+                        ? 'bg-[#0099FF] text-white shadow-md'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    توقيت موحد
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSeparateTimings(true)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      settings.separateLevelTimings
+                        ? 'bg-purple-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Layers size={14} />
+                    <span>فصل توقيت المستويات</span>
+                  </button>
+                </div>
 
                 <button
                   type="button"
                   disabled={syncingTimings}
-                  onClick={() => persistAndSyncTimings(settings, 'تم تحديث ومزامنة التوقيتات في جدول الاختبارات والحراسة')}
+                  onClick={() => persistAndSyncTimings(settings, 'تم تحديث ومزامنة التوقيتات والتواريخ في جدول الاختبارات والحراسة', { syncDatesFromStart: true })}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black transition-all cursor-pointer shadow-md disabled:opacity-50"
                 >
                   <RefreshCw size={14} className={syncingTimings ? 'animate-spin' : ''} />
@@ -522,13 +666,28 @@ export default function SettingsPage() {
 
             {!settings.separateLevelTimings ? (
               <div className="space-y-4">
+                {/* Quick banner to enable level-separated timings in 1 click */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-purple-950/25 p-3.5 rounded-xl border border-purple-500/30">
+                  <div className="flex items-center gap-2 text-xs font-bold text-purple-200">
+                    <Sparkles size={15} className="text-purple-400 shrink-0" />
+                    <span>هل يختلف توقيت الاختبار بين المستويات (مثلاً: السنوات 1 و2 من 08 إلى 10، والثالثة من 10 إلى 12)؟</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleApplySplitPreset('split_morning')}
+                    className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black transition-all cursor-pointer shrink-0 shadow-md"
+                  >
+                    فصل: 1و2ثا (08-10) • 3ثا (10-12)
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="space-y-1.5">
                     <label className="block text-xs font-bold text-slate-300">حصة الاختبار 1 (صباحاً)</label>
                     <input
                       value={settings.morningSlot1 ?? '08:00 - 10:00'}
                       onChange={e => handleUnifiedTimingField('morningSlot1', e.target.value)}
-                      onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                      onBlur={() => flushImmediateTimingSync(settings)}
                       placeholder="08:00 - 10:00"
                       className="w-full p-3 bg-[#182643] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-sm font-mono font-bold text-center"
                       dir="ltr"
@@ -540,7 +699,7 @@ export default function SettingsPage() {
                     <input
                       value={settings.morningSlot2 ?? '10:00 - 12:00'}
                       onChange={e => handleUnifiedTimingField('morningSlot2', e.target.value)}
-                      onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                      onBlur={() => flushImmediateTimingSync(settings)}
                       placeholder="10:00 - 12:00 (أو فارغ)"
                       className="w-full p-3 bg-[#182643] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-sm font-mono font-bold text-center"
                       dir="ltr"
@@ -552,7 +711,7 @@ export default function SettingsPage() {
                     <input
                       value={settings.morningTime || '08:00 - 12:00'}
                       onChange={e => handleUnifiedTimingField('morningTime', e.target.value)}
-                      onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                      onBlur={() => flushImmediateTimingSync(settings)}
                       className="w-full p-3 bg-[#091021] border border-cyan-500/40 rounded-xl outline-none focus:border-cyan-400 text-cyan-200 text-sm font-mono font-bold text-center"
                       dir="ltr"
                     />
@@ -563,7 +722,7 @@ export default function SettingsPage() {
                     <input
                       value={settings.afternoonTime || '13:00 - 17:00'}
                       onChange={e => handleUnifiedTimingField('afternoonTime', e.target.value)}
-                      onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                      onBlur={() => flushImmediateTimingSync(settings)}
                       className="w-full p-3 bg-[#091021] border border-purple-500/40 rounded-xl outline-none focus:border-purple-400 text-purple-200 text-sm font-mono font-bold text-center"
                       dir="ltr"
                     />
@@ -591,7 +750,7 @@ export default function SettingsPage() {
                       <input
                         value={settings.afternoonSlot || '13:30 - 15:30'}
                         onChange={e => handleUnifiedTimingField('afternoonSlot', e.target.value)}
-                        onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                        onBlur={() => flushImmediateTimingSync(settings)}
                         className="w-36 p-2 bg-[#091021] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-xs font-mono font-bold text-center"
                         dir="ltr"
                       />
@@ -612,6 +771,13 @@ export default function SettingsPage() {
                     >
                       <Sparkles size={13} />
                       <span>1و2 ثا (08:00 - 10:00) • 3 ثا (10:00 - 12:00)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplySplitPreset('split_afternoon')}
+                      className="px-3 py-1.5 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/35 text-cyan-200 border border-cyan-500/35 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      فصل السنة 3 (10-12 + 14-16)
                     </button>
                     <button
                       type="button"
@@ -658,13 +824,40 @@ export default function SettingsPage() {
                           </span>
                         </div>
 
+                        {/* One-click quick slots for this specific level */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            { label: '08-10 فقط', s1: '08:00 - 10:00', s2: '' },
+                            { label: '10-12 فقط', s1: '10:00 - 12:00', s2: '' },
+                            { label: '08-10 و 10-12', s1: '08:00 - 10:00', s2: '10:00 - 12:00' },
+                          ].map((preset) => {
+                            const active =
+                              cfg.morningSlot1.replace(/\s+/g, '') === preset.s1.replace(/\s+/g, '') &&
+                              (cfg.morningSlot2 || '').replace(/\s+/g, '') === preset.s2.replace(/\s+/g, '');
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => handleQuickLevelSlotPreset(lvl.key, preset.s1, preset.s2)}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
+                                  active
+                                    ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
+                                    : 'bg-[#091021] border-slate-700 text-slate-400 hover:text-white hover:border-slate-500'
+                                }`}
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
                         <div className="grid grid-cols-2 gap-2.5">
                           <div className="space-y-1">
                             <label className="block text-[11px] font-bold text-slate-300">الحصة الصباحية 1</label>
                             <input
                               value={cfg.morningSlot1}
                               onChange={e => handleLevelTimingField(lvl.key, 'morningSlot1', e.target.value)}
-                              onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                              onBlur={() => flushImmediateTimingSync(settings)}
                               placeholder="08:00 - 10:00"
                               className="w-full p-2.5 bg-[#091021] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-xs font-mono font-bold text-center"
                               dir="ltr"
@@ -676,7 +869,7 @@ export default function SettingsPage() {
                             <input
                               value={cfg.morningSlot2 || ''}
                               onChange={e => handleLevelTimingField(lvl.key, 'morningSlot2', e.target.value)}
-                              onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                              onBlur={() => flushImmediateTimingSync(settings)}
                               placeholder="فارغ لحصة واحدة"
                               className="w-full p-2.5 bg-[#091021] border border-slate-700 rounded-xl outline-none focus:border-cyan-400 text-white text-xs font-mono font-bold text-center placeholder:font-sans placeholder:text-[10px]"
                               dir="ltr"
@@ -694,6 +887,7 @@ export default function SettingsPage() {
                                 const currentLevels = settings.levelTimings || createDefaultLevelTimings();
                                 const nextSettings: SystemSettings = {
                                   ...settings,
+                                  separateLevelTimings: true,
                                   levelTimings: {
                                     ...currentLevels,
                                     [lvl.key]: { ...currentLevels[lvl.key], includeAfternoon: checked },
@@ -709,7 +903,7 @@ export default function SettingsPage() {
                             <input
                               value={cfg.afternoonSlot || '13:30 - 15:30'}
                               onChange={e => handleLevelTimingField(lvl.key, 'afternoonSlot', e.target.value)}
-                              onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                              onBlur={() => flushImmediateTimingSync(settings)}
                               placeholder="13:30 - 15:30"
                               className="w-full p-2 bg-[#121E36] border border-slate-700 rounded-lg outline-none focus:border-cyan-400 text-white text-xs font-mono font-bold text-center"
                               dir="ltr"
@@ -723,7 +917,7 @@ export default function SettingsPage() {
                             <input
                               value={cfg.morningTime}
                               onChange={e => handleLevelTimingField(lvl.key, 'morningTime', e.target.value)}
-                              onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                              onBlur={() => flushImmediateTimingSync(settings)}
                               className="w-full p-2 bg-[#091021] border border-cyan-500/30 rounded-xl outline-none focus:border-cyan-400 text-cyan-200 text-xs font-mono font-bold text-center"
                               dir="ltr"
                             />
@@ -733,7 +927,7 @@ export default function SettingsPage() {
                             <input
                               value={cfg.afternoonTime}
                               onChange={e => handleLevelTimingField(lvl.key, 'afternoonTime', e.target.value)}
-                              onBlur={() => syncExamsAndScheduleWithSettings(settings)}
+                              onBlur={() => flushImmediateTimingSync(settings)}
                               className="w-full p-2 bg-[#091021] border border-purple-500/30 rounded-xl outline-none focus:border-purple-400 text-purple-200 text-xs font-mono font-bold text-center"
                               dir="ltr"
                             />

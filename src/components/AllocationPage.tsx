@@ -6,19 +6,23 @@ import { Teacher, Exam, Hall, Assignment, SystemSettings } from '../types';
 import { generateAssignments } from '../lib/allocation';
 import {
   SETTINGS_CHANGE_EVENT,
+  buildTeacherScheduleRows,
+  compactTimeKey,
   doTimeRangesOverlap,
   resolveExamEffectiveTimeRange,
-  resolveProctoringPeriodHeaders
+  resolveProctoringPeriodHeaders,
+  resolveSessionSlotLists
 } from '../lib/timings';
 import { 
   Wand2, Download, Printer, Calendar, User, DoorOpen, X, 
   Filter, Search, BookOpen, Table, LayoutGrid, AlertCircle, Scissors, Eye, CheckCircle2,
   Sliders, UserCheck, UserX, RefreshCw, FileText, CheckSquare, Layers, ShieldCheck, Sparkles, FileUp,
-  Users, Trash2, Ban, ChevronDown, ChevronUp
+  Users, Trash2, Ban, ChevronDown, ChevronUp, UserPlus, Edit2, FileDown
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import ExcelImportModal from './ExcelImportModal';
+import AutoAddTeachersPanel from './AutoAddTeachersPanel';
 import { 
   generateConvocationsHtml, 
   generateHallTimetableHtml, 
@@ -29,7 +33,7 @@ import {
   sanitizeOklchInClonedDoc,
   EXIT_PRINT_EVENT
 } from '../utils/printHelpers';
-import { isDemoTeacher } from '../lib/constants';
+import { isDemoTeacher, SECONDARY_SUBJECTS } from '../lib/constants';
 
 const normalizeTeacherList = (list: any[]): Teacher[] =>
   (list || []).map((t: any) => {
@@ -130,10 +134,20 @@ export default function AllocationPage() {
   const [printOnlyAssigned, setPrintOnlyAssigned] = useState(true);
   const [selectedExamForSign, setSelectedExamForSign] = useState<string>('');
 
-  // Teacher Preview List Modal State & Dedicated Imported Teachers Section
+  // Teacher Preview List Modal State & Dedicated Teachers Section inside AllocationPage
   const [showTeacherListModal, setShowTeacherListModal] = useState(false);
+  const [showAutoAddInModal, setShowAutoAddInModal] = useState(false);
   const [teacherSearchTerm, setTeacherSearchTerm] = useState('');
-  const [showTeachersSection, setShowTeachersSection] = useState(false);
+  const [showTeachersSection, setShowTeachersSection] = useState(true);
+  const [showAddTeacherForm, setShowAddTeacherForm] = useState(false);
+  const [showAutoAddInline, setShowAutoAddInline] = useState(false);
+  const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
+  const [teacherFormName, setTeacherFormName] = useState('');
+  const [teacherFormSpecialty, setTeacherFormSpecialty] = useState('');
+  const [teacherFormSeniority, setTeacherFormSeniority] = useState<number>(0);
+  const [teacherFormIsExempt, setTeacherFormIsExempt] = useState(false);
+  const [teacherFormExemptReason, setTeacherFormExemptReason] = useState('');
+  const [teacherFormExceptions, setTeacherFormExceptions] = useState<string[]>([]);
   const [teacherSectionFilter, setTeacherSectionFilter] = useState<'all' | 'active' | 'exempt'>('all');
   const [teacherSectionSearch, setTeacherSectionSearch] = useState('');
   const [exemptTargetTeacher, setExemptTargetTeacher] = useState<Teacher | null>(null);
@@ -254,6 +268,201 @@ export default function AllocationPage() {
     } catch (e) {
       toast.error('حدث خطأ أثناء مسح القائمة', { id: 'clean-all' });
     }
+  };
+
+  const reloadTeachersList = async () => {
+    const freshTeachers = await api.get('/api/teachers');
+    const normalizedFresh = normalizeTeacherList(freshTeachers);
+    knownTeacherIdsRef.current = new Set();
+    setTeachers(normalizedFresh);
+    setSelectedTeacherIds(normalizedFresh.filter(t => !t.isExempt && t.id).map(t => String(t.id)));
+    setShowTeachersSection(true);
+  };
+
+  const openAddTeacherForm = (teacher?: Teacher | null) => {
+    setShowTeachersSection(true);
+    setShowAutoAddInline(false);
+    if (teacher) {
+      setEditingTeacher(teacher);
+      setTeacherFormName(teacher.name || '');
+      setTeacherFormSpecialty(teacher.specialty || '');
+      setTeacherFormSeniority(Number(teacher.seniority) || 0);
+      setTeacherFormIsExempt(Boolean(teacher.isExempt));
+      setTeacherFormExemptReason(teacher.exemptReason || '');
+      setTeacherFormExceptions(teacher.availabilityExceptions || []);
+      setShowAddTeacherForm(true);
+    } else {
+      setEditingTeacher(null);
+      setTeacherFormName('');
+      setTeacherFormSpecialty('');
+      setTeacherFormSeniority(0);
+      setTeacherFormIsExempt(false);
+      setTeacherFormExemptReason('');
+      setTeacherFormExceptions([]);
+      setShowAddTeacherForm(prev => !prev);
+    }
+  };
+
+  const handleSaveSingleTeacher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedName = teacherFormName.trim();
+    const trimmedSpec = teacherFormSpecialty.trim();
+    if (!trimmedName || !trimmedSpec) {
+      toast.error('يرجى إدخال الاسم الكامل والتخصص');
+      return;
+    }
+
+    const teacherData = {
+      name: trimmedName,
+      specialty: trimmedSpec,
+      seniority: Number(teacherFormSeniority) || 0,
+      email: '',
+      availabilityExceptions: JSON.stringify(teacherFormExceptions),
+      isExempt: teacherFormIsExempt ? 1 : 0,
+      exemptReason: teacherFormIsExempt ? (teacherFormExemptReason.trim() || 'غائب / لديه حجة') : '',
+    };
+
+    try {
+      if (editingTeacher?.id) {
+        await api.put(`/api/teachers/${editingTeacher.id}`, teacherData);
+        if (teacherFormIsExempt) {
+          const remaining = assignments.filter(a => String(a.teacherId) !== String(editingTeacher.id));
+          if (remaining.length !== assignments.length) {
+            await recalculateAndSaveAssignments(remaining);
+          }
+        }
+        toast.success('تم تحديث بيانات الأستاذ بنجاح');
+      } else {
+        await api.post('/api/teachers', {
+          ...teacherData,
+          totalHours: 0,
+          id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        });
+        toast.success('تم إضافة الأستاذ بنجاح');
+      }
+      setShowAddTeacherForm(false);
+      setEditingTeacher(null);
+      setTeacherFormName('');
+      setTeacherFormSpecialty('');
+      setTeacherFormSeniority(0);
+      setTeacherFormIsExempt(false);
+      setTeacherFormExemptReason('');
+      setTeacherFormExceptions([]);
+      await reloadTeachersList();
+    } catch (err) {
+      console.error(err);
+      toast.error('حدث خطأ أثناء حفظ بيانات الأستاذ');
+    }
+  };
+
+  const toggleTeacherFormException = (sessionKey: string) => {
+    setTeacherFormExceptions(prev =>
+      prev.includes(sessionKey) ? prev.filter(k => k !== sessionKey) : [...prev, sessionKey]
+    );
+  };
+
+  const handleDownloadTeacherTemplate = () => {
+    const templateData = [
+      { 'الاسم واللقب': 'بن علي محمد', 'المادة / التخصص': 'رياضيات', 'الأقدمية': 12, 'الحالة': 'متاح', 'سبب الإعفاء': '' },
+      { 'الاسم واللقب': 'عمراني فاطمة', 'المادة / التخصص': 'علوم فيزيائية', 'الأقدمية': 8, 'الحالة': 'معفى', 'سبب الإعفاء': 'عطلة مرضية' },
+      { 'الاسم واللقب': 'سليماني أحمد', 'المادة / التخصص': 'لغة عربية', 'الأقدمية': 15, 'الحالة': 'متاح', 'سبب الإعفاء': '' }
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'نموذج_الأساتذة');
+    XLSX.writeFile(workbook, 'نموذج_استيراد_الأساتذة.xlsx');
+    toast.success('تم تحميل نموذج الإكسل');
+  };
+
+  const handleExportTeachersExcel = () => {
+    if (teachers.length === 0) {
+      toast.error('لا يوجد أساتذة لتصديرهم');
+      return;
+    }
+    const data = teachers.map((t, index) => ({
+      'الرقم': index + 1,
+      'اسم الأستاذ': t.name,
+      'التخصص': t.specialty,
+      'الأقدمية': t.seniority || 0,
+      'الحالة': t.isExempt ? `معفى (${t.exemptReason || 'غائب / لديه حجة'})` : 'متاح للحراسة',
+      'ساعات الحراسة المسندة': `${t.totalHours || 0} ساعة`,
+      'عدد الغيابات / الاستثناءات': t.availabilityExceptions ? t.availabilityExceptions.length : 0
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'قائمة_الأساتذة');
+    XLSX.writeFile(workbook, `قائمة_أساتذة_${institutionName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    toast.success('تم تصدير قائمة الأساتذة بصيغة Excel بنجاح');
+  };
+
+  const handlePrintTeachersList = () => {
+    if (teachers.length === 0) {
+      toast.error('لا توجد بيانات للطباعة');
+      return;
+    }
+    const rowsHtml = teachers.map((t, idx) => `
+      <tr style="border-bottom: 1px solid #ddd; text-align: center;">
+        <td style="padding: 8px; border: 1px solid #333; font-weight: bold;">${idx + 1}</td>
+        <td style="padding: 8px; border: 1px solid #333; text-align: right; font-weight: bold;">${t.name}</td>
+        <td style="padding: 8px; border: 1px solid #333;">${t.specialty}</td>
+        <td style="padding: 8px; border: 1px solid #333;">${t.seniority || 0}</td>
+        <td style="padding: 8px; border: 1px solid #333;">${t.isExempt ? `معفى (${t.exemptReason || 'غائب / لديه حجة'})` : 'متاح'}</td>
+        <td style="padding: 8px; border: 1px solid #333; font-weight: bold;">${t.totalHours || 0} س</td>
+      </tr>
+    `).join('');
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>
+        <meta charset="utf-8">
+        <title>قائمة الأساتذة - ${institutionName}</title>
+        <style>
+          body { font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif; padding: 20px; color: #000; background: #fff; }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 12px; margin-bottom: 20px; }
+          .header h3 { margin: 2px 0; font-size: 15px; font-weight: 700; }
+          .header h4 { margin: 2px 0; font-size: 13px; font-weight: 600; }
+          .header h2 { margin: 10px 0 4px 0; font-size: 18px; font-weight: 900; background: #f0f0f0; padding: 6px; border-radius: 4px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }
+          th { background-color: #1e293b; color: #fff; padding: 10px; border: 1px solid #000; font-weight: bold; }
+          td { padding: 8px; border: 1px solid #333; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h3>الجمهورية الجزائرية الديمقراطية الشعبية</h3>
+          <h3>وزارة التربية الوطنية</h3>
+          <h4>مديرية التربية لولاية ${wilaya} | ${institutionName}</h4>
+          <h2>قائمة الأساتذة والتخصصات وحجم الحراسة</h2>
+          <p style="font-size: 11px; margin-top: 4px;">إجمالي الأساتذة: ${teachers.length}</p>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40px;">الرقم</th>
+              <th>اسم ولقب الأستاذ</th>
+              <th>التخصص / المادة</th>
+              <th>الأقدمية</th>
+              <th>الحالة / الإعفاء</th>
+              <th>ساعات الحراسة المسندة</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <table style="width: 100%; margin-top: 30px; border: none;">
+          <tr>
+            <td style="border: none; text-align: right; font-weight: bold; font-size: 13px; width: 50%; padding-right: 10px;">
+              تأشيرة وتوقيع مدير المؤسسة
+            </td>
+            <td style="border: none; text-align: left; font-weight: bold; font-size: 13px; width: 50%; padding-left: 10px;">
+              تأشيرة وتوقيع الناظر
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `;
+    printHtmlDirectly(htmlContent);
   };
 
   // Teacher Excel Import State
@@ -931,6 +1140,7 @@ export default function AllocationPage() {
   const executePrint = () => {
     setShowPrintModal(false);
     const resolvedHeaders = resolveProctoringPeriodHeaders(activeSession, systemSettings);
+    const resolvedSlotLists = resolveSessionSlotLists(activeSession, systemSettings, activeExams);
     const settings = {
       institutionName,
       wilaya,
@@ -938,6 +1148,8 @@ export default function AllocationPage() {
       selectedTerm,
       morningTime: systemSettings?.separateLevelTimings ? resolvedHeaders.morningTime : (systemSettings?.morningTime || morningTime),
       afternoonTime: systemSettings?.separateLevelTimings ? resolvedHeaders.afternoonTime : (systemSettings?.afternoonTime || afternoonTime),
+      morningSlots: resolvedSlotLists.morningSlots,
+      afternoonSlots: resolvedSlotLists.afternoonSlots,
       customExamTitle,
       separateLevelTimings: Boolean(systemSettings?.separateLevelTimings)
     };
@@ -1192,6 +1404,37 @@ export default function AllocationPage() {
             )}
           </button>
 
+          <button
+            type="button"
+            onClick={() => openAddTeacherForm(null)}
+            className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl transition-all font-black text-xs lg:text-sm shadow-md border cursor-pointer whitespace-nowrap shrink-0 ${
+              showTeachersSection && (showAddTeacherForm || editingTeacher)
+                ? 'bg-sky-600 text-white border-sky-400'
+                : 'bg-[#0099FF]/20 text-sky-200 border-sky-500/40 hover:bg-[#0099FF]/30'
+            }`}
+          >
+            <UserPlus size={17} />
+            <span>{showTeachersSection && (showAddTeacherForm || editingTeacher) ? 'إغلاق نموذج الإضافة' : 'إضافة أستاذ'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setShowTeachersSection(true);
+              setShowAddTeacherForm(false);
+              setEditingTeacher(null);
+              setShowAutoAddInline(prev => !prev);
+            }}
+            className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl transition-all font-black text-xs lg:text-sm border cursor-pointer whitespace-nowrap shrink-0 ${
+              showTeachersSection && showAutoAddInline
+                ? 'bg-cyan-600 text-white border-cyan-400'
+                : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/25'
+            }`}
+          >
+            <Sparkles size={16} />
+            <span>إضافة الأساتذة تلقائياً</span>
+          </button>
+
           <label 
             className="flex items-center justify-center gap-2 bg-[#182643] text-emerald-300 border border-emerald-500/30 hover:bg-[#1f3054] px-4 py-2.5 rounded-2xl cursor-pointer transition-all font-bold text-xs lg:text-sm whitespace-nowrap shrink-0"
             title="استيراد قائمة الأساتذة من ملف إكسل"
@@ -1338,7 +1581,7 @@ export default function AllocationPage() {
         </div>
       )}
 
-      {/* Dedicated Imported Teachers & Exemptions Panel (خانة قائمة الأساتذة المستوردة وإدارة الإعفاءات) */}
+      {/* Dedicated Teachers List, Add Teacher & Exemptions Panel (في خانة ضبط جداول الحراسة) */}
       {showTeachersSection && (
         <div className="bg-[#121E36] p-5 rounded-3xl border border-cyan-500/30 shadow-xl space-y-4 print:hidden animate-in fade-in duration-200">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-4">
@@ -1348,7 +1591,7 @@ export default function AllocationPage() {
               </div>
               <div>
                 <h4 className="font-black text-base text-white flex items-center gap-2 flex-wrap">
-                  <span>خانة قائمة الأساتذة المستوردة وإدارة الإعفاءات</span>
+                  <span>قائمة الأساتذة واستثناءات الحراسة</span>
                   <span className="text-[11px] bg-[#0099FF]/20 text-cyan-300 border border-cyan-500/30 px-2.5 py-0.5 rounded-full font-bold">
                     الإجمالي: {teachers.length}
                   </span>
@@ -1360,7 +1603,7 @@ export default function AllocationPage() {
                   </span>
                 </h4>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  تُعرض هنا قائمة الأساتذة المدرجة تلقائياً مع إمكانية تحديد الأستاذ <strong className="text-rose-300">المعفى</strong> (غائب أو لديه حجة) لاستثنائه من التوزيع والاستدعاءات.
+                  إضافة الأساتذة يدوياً أو تلقائياً، استيراد إكسل، وتحديد حالة <strong className="text-rose-300">المعفى</strong> والغيابات مباشرةً ضمن ضبط جداول الحراسة.
                 </p>
               </div>
             </div>
@@ -1386,11 +1629,65 @@ export default function AllocationPage() {
                 </button>
               )}
 
-              <label className="flex items-center gap-1.5 bg-[#0099FF] hover:bg-sky-500 text-white px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md">
+              <button
+                type="button"
+                onClick={handleDownloadTeacherTemplate}
+                className="flex items-center gap-1.5 bg-[#182643] hover:bg-[#1f3054] text-slate-300 border border-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                title="تحميل نموذج ملف إكسل فارغ للاستيراد"
+              >
+                <Download size={14} />
+                <span>النموذج</span>
+              </button>
+
+              <label className="flex items-center gap-1.5 bg-[#182643] hover:bg-[#1f3054] text-emerald-300 border border-emerald-500/30 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer">
                 <FileUp size={14} />
-                <span>استيراد إكسل جديد</span>
+                <span>استيراد إكسل</span>
                 <input type="file" className="hidden" accept=".xlsx, .xls, .csv" onChange={handleTeacherFileUpload} />
               </label>
+
+              <button
+                type="button"
+                onClick={handleExportTeachersExcel}
+                className="flex items-center gap-1.5 bg-[#182643] hover:bg-[#1f3054] text-cyan-300 border border-cyan-500/30 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                <FileDown size={14} />
+                <span>تصدير إكسل</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrintTeachersList}
+                className="flex items-center gap-1.5 bg-[#182643] hover:bg-[#1f3054] text-amber-300 border border-amber-500/30 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                <Printer size={14} />
+                <span>طباعة القائمة</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddTeacherForm(false);
+                  setEditingTeacher(null);
+                  setShowAutoAddInline(prev => !prev);
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer border ${
+                  showAutoAddInline
+                    ? 'bg-cyan-600 text-white border-cyan-400'
+                    : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border-cyan-500/40'
+                }`}
+              >
+                <Sparkles size={14} />
+                <span>{showAutoAddInline ? 'إخفاء الإضافة التلقائية' : 'إضافة الأساتذة تلقائياً'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAddTeacherForm(null)}
+                className="flex items-center gap-1.5 bg-[#0099FF] hover:bg-sky-500 text-white px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md"
+              >
+                <UserPlus size={14} />
+                <span>{(showAddTeacherForm || editingTeacher) ? 'إلغاء' : 'إضافة أستاذ'}</span>
+              </button>
 
               <button
                 onClick={() => setShowTeacherListModal(true)}
@@ -1411,6 +1708,123 @@ export default function AllocationPage() {
               </button>
             </div>
           </div>
+
+          {showAutoAddInline && (
+            <AutoAddTeachersPanel
+              existingNames={teachers.map(t => t.name)}
+              onSuccess={reloadTeachersList}
+              onClose={() => setShowAutoAddInline(false)}
+            />
+          )}
+
+          {(showAddTeacherForm || editingTeacher) && (
+            <form onSubmit={handleSaveSingleTeacher} className="grid grid-cols-1 md:grid-cols-4 gap-4 p-5 bg-[#091021]/90 rounded-2xl border border-slate-700">
+              <div className="md:col-span-2">
+                <label className="block text-xs font-bold text-slate-300 mb-1">الاسم الكامل</label>
+                <input
+                  type="text"
+                  value={teacherFormName}
+                  onChange={(e) => setTeacherFormName(e.target.value)}
+                  placeholder="أدخل اسم ولقب الأستاذ..."
+                  required
+                  className="w-full p-2.5 bg-[#182643] border border-slate-700 rounded-xl text-white outline-none focus:border-cyan-400 text-xs font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">التخصص</label>
+                <input
+                  type="text"
+                  list="allocation-subjects"
+                  value={teacherFormSpecialty}
+                  onChange={(e) => setTeacherFormSpecialty(e.target.value)}
+                  placeholder="اختر أو اكتب المادة..."
+                  required
+                  className="w-full p-2.5 bg-[#182643] border border-slate-700 rounded-xl text-white outline-none focus:border-cyan-400 text-xs font-bold"
+                />
+                <datalist id="allocation-subjects">
+                  {SECONDARY_SUBJECTS.map(sub => <option key={sub} value={sub} />)}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">الأقدمية</label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    value={teacherFormSeniority}
+                    onChange={(e) => setTeacherFormSeniority(Number(e.target.value) || 0)}
+                    className="w-full p-2.5 bg-[#182643] border border-slate-700 rounded-xl text-white outline-none focus:border-cyan-400 text-xs font-bold text-center"
+                  />
+                  <button
+                    type="submit"
+                    className="bg-[#0099FF] hover:bg-sky-500 text-white px-5 rounded-xl font-black text-xs transition-all cursor-pointer shrink-0"
+                  >
+                    حفظ
+                  </button>
+                </div>
+              </div>
+
+              <div className="md:col-span-4 bg-[#182643] p-3.5 rounded-xl border border-slate-700/80 flex flex-col sm:flex-row sm:items-center gap-4">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={teacherFormIsExempt}
+                    onChange={(e) => {
+                      setTeacherFormIsExempt(e.target.checked);
+                      if (e.target.checked && !teacherFormExemptReason) {
+                        setTeacherFormExemptReason('غائب');
+                      }
+                    }}
+                    className="w-4 h-4 accent-rose-500 rounded cursor-pointer"
+                  />
+                  <span className={`text-xs font-black ${teacherFormIsExempt ? 'text-rose-300' : 'text-slate-200'}`}>
+                    معفى من الحراسة (الأستاذ غائب أو لديه حجة)
+                  </span>
+                </label>
+
+                {teacherFormIsExempt && (
+                  <input
+                    type="text"
+                    value={teacherFormExemptReason}
+                    onChange={(e) => setTeacherFormExemptReason(e.target.value)}
+                    placeholder="سبب الإعفاء أو الحجة (مثال: غائب، عطلة مرضية، حجة إدارية...)"
+                    className="flex-1 p-2 bg-[#091021] border border-rose-500/40 rounded-xl text-white outline-none focus:border-rose-400 text-xs font-bold"
+                  />
+                )}
+              </div>
+
+              {(() => {
+                const examSessions: string[] = Array.from(new Set<string>(exams.map((ex: Exam) => `${ex.date}-${ex.period}`))).sort();
+                if (examSessions.length === 0) return null;
+                return (
+                  <div className="md:col-span-4">
+                    <label className="block text-xs font-bold text-slate-300 mb-2">غيابات الأستاذ (استثناءات الحراسة)</label>
+                    <div className="flex flex-wrap gap-2">
+                      {examSessions.map(session => (
+                        <label
+                          key={session}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border cursor-pointer transition-colors text-xs ${
+                            teacherFormExceptions.includes(session)
+                              ? 'bg-rose-950/60 border-rose-600 text-rose-300 font-bold'
+                              : 'bg-[#182643] border-slate-700 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="hidden"
+                            checked={teacherFormExceptions.includes(session)}
+                            onChange={() => toggleTeacherFormException(session)}
+                          />
+                          <span className="font-bold font-mono">{session.split('-').slice(0, 3).join('-')}</span>
+                          <span className="text-[10px]">{session.endsWith('morning') ? 'صباحاً' : 'مساءً'}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </form>
+          )}
 
           {/* Filter Tabs & Search inside Dedicated Teachers Box */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -1470,13 +1884,42 @@ export default function AllocationPage() {
 
             if (list.length === 0) {
               return (
-                <div className="p-8 text-center bg-[#091021]/60 rounded-2xl border border-slate-800 text-slate-400 space-y-2">
+                <div className="p-8 text-center bg-[#091021]/60 rounded-2xl border border-slate-800 text-slate-400 space-y-3">
                   <Users size={34} className="mx-auto text-slate-500 opacity-60" />
                   <p className="text-sm font-bold text-slate-300">
                     {teachers.length === 0
-                      ? 'لا يوجد أساتذة مدرجون حالياً — اضغط على "استيراد إكسل جديد" لإدراج القائمة'
+                      ? 'لا يوجد أساتذة مدرجون حالياً — يمكنك إضافة أستاذ يدوياً، الإضافة تلقائياً، أو استيراد ملف إكسل'
                       : 'لا توجد نتائج مطابقة للبحث أو الفلتر المحدد'}
                   </p>
+                  {teachers.length === 0 && (
+                    <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => openAddTeacherForm(null)}
+                        className="flex items-center gap-1.5 bg-[#0099FF] hover:bg-sky-500 text-white px-4 py-2 rounded-xl text-xs font-black cursor-pointer"
+                      >
+                        <UserPlus size={14} />
+                        <span>إضافة أستاذ</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddTeacherForm(false);
+                          setEditingTeacher(null);
+                          setShowAutoAddInline(true);
+                        }}
+                        className="flex items-center gap-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 px-4 py-2 rounded-xl text-xs font-black cursor-pointer"
+                      >
+                        <Sparkles size={14} />
+                        <span>إضافة الأساتذة تلقائياً</span>
+                      </button>
+                      <label className="flex items-center gap-1.5 bg-[#182643] hover:bg-[#1f3054] text-emerald-300 border border-emerald-500/30 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer">
+                        <FileUp size={14} />
+                        <span>استيراد إكسل</span>
+                        <input type="file" className="hidden" accept=".xlsx, .xls, .csv" onChange={handleTeacherFileUpload} />
+                      </label>
+                    </div>
+                  )}
                 </div>
               );
             }
@@ -1627,6 +2070,14 @@ export default function AllocationPage() {
                                     <span>إعفاء</span>
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={() => openAddTeacherForm(t)}
+                                  className="p-1.5 text-slate-400 hover:text-cyan-400 bg-[#182643] rounded-lg transition-colors cursor-pointer"
+                                  title="تعديل بيانات الأستاذ أو استثناءاته"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
                                 <button
                                   onClick={() => handleDeleteTeacherFromAllocation(t.id!)}
                                   className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
@@ -2381,6 +2832,35 @@ export default function AllocationPage() {
             </div>
 
             <div className="p-5 overflow-y-auto space-y-4 text-xs bg-[#121E36]">
+              {/* Slot / Exam Selection when multiple level timings exist on this day & period */}
+              {(() => {
+                const slotCandidates = (activeExams.length > 0 ? activeExams : exams).filter(
+                  e => e.date === assignEmptyTarget.date && e.period === assignEmptyTarget.period
+                );
+                if (slotCandidates.length <= 1) return null;
+                return (
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-300 block">توقيت ومادة الحراسة:</label>
+                    <select
+                      value={String(assignEmptyTarget.exam.id)}
+                      onChange={(e) => {
+                        const chosen = slotCandidates.find(ex => String(ex.id) === e.target.value);
+                        if (chosen) {
+                          setAssignEmptyTarget(prev => (prev ? { ...prev, exam: chosen } : prev));
+                        }
+                      }}
+                      className="w-full bg-[#091021] border border-slate-700 rounded-xl p-2.5 text-white font-bold"
+                    >
+                      {slotCandidates.map(ex => (
+                        <option key={ex.id} value={ex.id}>
+                          {resolveExamEffectiveTimeRange(ex, systemSettings)} — {ex.subject}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
+
               {/* Teacher Selection */}
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-300 block">الأستاذ المراد تكليفه:</label>
@@ -2620,6 +3100,16 @@ export default function AllocationPage() {
                     {sessionsToRender.map((sessionKey) => {
                       const weekDates = getWeekDatesForSession(sessionKey);
                       const sessionAssigned = getTeacherEnrichedAssignments(String(teacher.id), sessionKey);
+                      const sessionSlotLists = resolveSessionSlotLists(
+                        sessionKey,
+                        systemSettings,
+                        getSessionExams(sessionKey)
+                      );
+                      const scheduleRows = buildTeacherScheduleRows(
+                        sessionAssigned,
+                        sessionSlotLists.morningSlots,
+                        sessionSlotLists.afternoonSlots
+                      );
 
                       return (
                         <div key={`${teacher.id}-${sessionKey}`} className="space-y-1.5 overflow-x-auto">
@@ -2636,127 +3126,99 @@ export default function AllocationPage() {
                               </tr>
                             </thead>
                             <tbody>
-                              {/* Morning Row */}
-                              <tr className="hover:bg-[#182643]/50">
-                                <td className="border border-slate-800 p-2 font-bold bg-[#091021] text-slate-300">
-                                  <div>صباحي</div>
-                                  <div className="text-[10px] font-mono text-cyan-300/90 mt-0.5 leading-snug" dir="auto">{displayMorningHeader}</div>
-                                </td>
-                                {weekDates.map(date => {
-                                  const mornings = sessionAssigned.filter(a => a.date === date && a.period === 'morning');
-                                  return (
-                                    <td key={`screen-m-${date}`} className="border border-slate-800 p-2 h-16 align-middle">
-                                      {mornings.length > 0 ? (
-                                        <div className="flex flex-col gap-1 items-center">
-                                          {mornings.map(m => {
-                                            const exam = exams.find(e => String(e.id) === String(m.examId));
-                                            const hall = halls.find(h => String(h.id) === String(m.hallId));
-                                            const isReserve = m.hallId === 'reserve';
-                                            return (
-                                              <div 
-                                                key={m.id}
-                                                onClick={() => exam && setCellTarget({ assignment: m, teacher, exam, hall, isReserve })}
-                                                className={`w-full p-2 rounded-xl border cursor-pointer transition-all group text-center ${
-                                                  isReserve 
-                                                    ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-300' 
-                                                    : 'bg-[#0099FF]/20 hover:bg-purple-600/30 border-sky-500/30 text-cyan-300'
-                                                }`}
-                                                title="انقر لتعديل التكليف، استبدال الأستاذ، أو تغيير القاعة والاحتياط"
-                                              >
-                                                <div className="font-extrabold text-[11px]">
-                                                  {isReserve ? '🛡️ حارس احتياط' : m.hallName}
-                                                </div>
-                                                <div className="text-[11px] font-bold text-white">{m.subject}</div>
-                                                {(systemSettings?.separateLevelTimings || mornings.length > 1) && (
-                                                  <div className="text-[10px] font-mono font-bold text-cyan-200/90 mt-0.5" dir="ltr">
-                                                    {m.timeRange} ({m.levelLabel})
-                                                  </div>
-                                                )}
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      ) : (
-                                        <button
-                                          onClick={() => {
-                                            const ex = activeExams.find(e => e.date === date && e.period === 'morning') || exams.find(e => e.date === date && e.period === 'morning');
-                                            if (ex) {
-                                              setAssignEmptyTarget({ exam: ex, date, period: 'morning', teacher });
-                                            } else {
-                                              toast.error('لا يوجد اختبار مبرمج في هذه الفترة');
-                                            }
-                                          }}
-                                          className="text-slate-600 hover:text-cyan-400 hover:bg-[#182643] p-1.5 rounded-lg border border-transparent hover:border-slate-700 font-bold transition-all text-xs cursor-pointer"
-                                          title="انقر لإسناد تكليف يدوي"
-                                        >
-                                          -
-                                        </button>
-                                      )}
+                              {scheduleRows.map((row) => {
+                                const isMorning = row.period === 'morning';
+                                return (
+                                  <tr key={row.key} className="hover:bg-[#182643]/50">
+                                    <td className="border border-slate-800 p-2 font-bold bg-[#091021] text-slate-300">
+                                      <div>{row.label}</div>
+                                      <div
+                                        className={`text-[10px] font-mono mt-0.5 leading-snug ${
+                                          isMorning ? 'text-cyan-300/90' : 'text-purple-300/90'
+                                        }`}
+                                        dir="ltr"
+                                      >
+                                        {row.timeRange}
+                                      </div>
                                     </td>
-                                  );
-                                })}
-                              </tr>
-
-                              {/* Afternoon Row */}
-                              <tr className="hover:bg-[#182643]/50">
-                                <td className="border border-slate-800 p-2 font-bold bg-[#091021] text-slate-300">
-                                  <div>مسائي</div>
-                                  <div className="text-[10px] font-mono text-purple-300/90 mt-0.5 leading-snug" dir="auto">{displayAfternoonHeader}</div>
-                                </td>
-                                {weekDates.map(date => {
-                                  const afternoons = sessionAssigned.filter(a => a.date === date && a.period === 'afternoon');
-                                  return (
-                                    <td key={`screen-a-${date}`} className="border border-slate-800 p-2 h-16 align-middle">
-                                      {afternoons.length > 0 ? (
-                                        <div className="flex flex-col gap-1 items-center">
-                                          {afternoons.map(af => {
-                                            const exam = exams.find(e => String(e.id) === String(af.examId));
-                                            const hall = halls.find(h => String(h.id) === String(af.hallId));
-                                            const isReserve = af.hallId === 'reserve';
-                                            return (
-                                              <div 
-                                                key={af.id}
-                                                onClick={() => exam && setCellTarget({ assignment: af, teacher, exam, hall, isReserve })}
-                                                className={`w-full p-2 rounded-xl border cursor-pointer transition-all group text-center ${
-                                                  isReserve 
-                                                    ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-300' 
-                                                    : 'bg-purple-500/20 hover:bg-purple-600/40 border-purple-500/30 text-purple-200'
-                                                }`}
-                                                title="انقر لتعديل التكليف، استبدال الأستاذ، أو تغيير القاعة والاحتياط"
-                                              >
-                                                <div className="font-extrabold text-[11px]">
-                                                  {isReserve ? '🛡️ حارس احتياط' : af.hallName}
-                                                </div>
-                                                <div className="text-[11px] font-bold text-white">{af.subject}</div>
-                                                {(systemSettings?.separateLevelTimings || afternoons.length > 1) && (
-                                                  <div className="text-[10px] font-mono font-bold text-purple-200/90 mt-0.5" dir="ltr">
-                                                    {af.timeRange} ({af.levelLabel})
+                                    {weekDates.map((date) => {
+                                      const slotItems = sessionAssigned.filter((a) => {
+                                        if (a.date !== date || a.period !== row.period) return false;
+                                        if (!row.filterByTime) return true;
+                                        return compactTimeKey(a.timeRange) === row.timeKey;
+                                      });
+                                      return (
+                                        <td key={`screen-${row.key}-${date}`} className="border border-slate-800 p-2 h-16 align-middle">
+                                          {slotItems.length > 0 ? (
+                                            <div className="flex flex-col gap-1 items-center">
+                                              {slotItems.map((item) => {
+                                                const exam = exams.find(e => String(e.id) === String(item.examId));
+                                                const hall = halls.find(h => String(h.id) === String(item.hallId));
+                                                const isReserve = item.hallId === 'reserve';
+                                                return (
+                                                  <div
+                                                    key={item.id}
+                                                    onClick={() => exam && setCellTarget({ assignment: item, teacher, exam, hall, isReserve })}
+                                                    className={`w-full p-2 rounded-xl border cursor-pointer transition-all group text-center ${
+                                                      isReserve
+                                                        ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-300'
+                                                        : isMorning
+                                                        ? 'bg-[#0099FF]/20 hover:bg-purple-600/30 border-sky-500/30 text-cyan-300'
+                                                        : 'bg-purple-500/20 hover:bg-purple-600/40 border-purple-500/30 text-purple-200'
+                                                    }`}
+                                                    title="انقر لتعديل التكليف، استبدال الأستاذ، أو تغيير القاعة والاحتياط"
+                                                  >
+                                                    <div className="font-extrabold text-[11px]">
+                                                      {isReserve ? '🛡️ حارس احتياط' : item.hallName}
+                                                    </div>
+                                                    <div
+                                                      className={`text-[10px] font-mono font-bold mt-0.5 ${
+                                                        isReserve
+                                                          ? 'text-amber-200/90'
+                                                          : isMorning
+                                                          ? 'text-cyan-200/90'
+                                                          : 'text-purple-200/90'
+                                                      }`}
+                                                      dir="ltr"
+                                                    >
+                                                      {item.timeRange}
+                                                    </div>
                                                   </div>
-                                                )}
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      ) : (
-                                        <button
-                                          onClick={() => {
-                                            const ex = activeExams.find(e => e.date === date && e.period === 'afternoon') || exams.find(e => e.date === date && e.period === 'afternoon');
-                                            if (ex) {
-                                              setAssignEmptyTarget({ exam: ex, date, period: 'afternoon', teacher });
-                                            } else {
-                                              toast.error('لا يوجد اختبار مبرمج في هذه الفترة');
-                                            }
-                                          }}
-                                          className="text-slate-600 hover:text-cyan-400 hover:bg-[#182643] p-1.5 rounded-lg border border-transparent hover:border-slate-700 font-bold transition-all text-xs cursor-pointer"
-                                          title="انقر لإسناد تكليف يدوي"
-                                        >
-                                          -
-                                        </button>
-                                      )}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
+                                                );
+                                              })}
+                                            </div>
+                                          ) : (
+                                            <button
+                                              onClick={() => {
+                                                const pool = activeExams.length > 0 ? activeExams : exams;
+                                                const dayPeriodExams = pool.filter(e => e.date === date && e.period === row.period);
+                                                const matchedByTime = row.filterByTime
+                                                  ? dayPeriodExams.find(
+                                                      e => compactTimeKey(resolveExamEffectiveTimeRange(e, systemSettings)) === row.timeKey
+                                                    )
+                                                  : undefined;
+                                                const ex =
+                                                  matchedByTime ||
+                                                  dayPeriodExams[0] ||
+                                                  exams.find(e => e.date === date && e.period === row.period);
+                                                if (ex) {
+                                                  setAssignEmptyTarget({ exam: ex, date, period: row.period, teacher });
+                                                } else {
+                                                  toast.error('لا يوجد اختبار مبرمج في هذه الفترة');
+                                                }
+                                              }}
+                                              className="text-slate-600 hover:text-cyan-400 hover:bg-[#182643] p-1.5 rounded-lg border border-transparent hover:border-slate-700 font-bold transition-all text-xs cursor-pointer"
+                                              title="انقر لإسناد تكليف يدوي"
+                                            >
+                                              -
+                                            </button>
+                                          )}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -3226,6 +3688,19 @@ export default function AllocationPage() {
                     </button>
                   )}
 
+                  <button
+                    type="button"
+                    onClick={() => setShowAutoAddInModal(prev => !prev)}
+                    className={`flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer border shrink-0 ${
+                      showAutoAddInModal
+                        ? 'bg-cyan-600 text-white border-cyan-400'
+                        : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border-cyan-500/40'
+                    }`}
+                  >
+                    <Sparkles size={14} />
+                    <span>{showAutoAddInModal ? 'إخفاء الإضافة التلقائية' : 'إضافة الأساتذة تلقائياً'}</span>
+                  </button>
+
                   <label 
                     className="flex items-center justify-center gap-2 bg-[#0099FF] hover:bg-sky-500 text-white px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md shrink-0"
                     title="استيراد قائمة الأساتذة من ملف إكسل واستبدال التجريبيين"
@@ -3239,7 +3714,22 @@ export default function AllocationPage() {
             </div>
 
             {/* Teachers Table View */}
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-4">
+              {showAutoAddInModal && (
+                <AutoAddTeachersPanel
+                  compact
+                  existingNames={teachers.map(t => t.name)}
+                  onSuccess={async () => {
+                    const freshTeachers = await api.get('/api/teachers');
+                    const normalizedFresh = normalizeTeacherList(freshTeachers);
+                    knownTeacherIdsRef.current = new Set();
+                    setTeachers(normalizedFresh);
+                    setSelectedTeacherIds(normalizedFresh.filter(t => !t.isExempt && t.id).map(t => String(t.id)));
+                    setShowTeachersSection(true);
+                  }}
+                  onClose={() => setShowAutoAddInModal(false)}
+                />
+              )}
               {teachers.filter(t => 
                 t.name.toLowerCase().includes(teacherSearchTerm.toLowerCase()) || 
                 t.specialty.toLowerCase().includes(teacherSearchTerm.toLowerCase()) ||

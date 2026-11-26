@@ -375,26 +375,59 @@ export default function HallsPage() {
   // Add/Edit Single Hall
   const handleSaveHall = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const hallData = {
-      name: (formData.get('name') as string).trim(),
-      capacity: Number(formData.get('capacity')) || 30,
-    };
+    const form = e.currentTarget;
+    const formData = new FormData(form);
+    const name = String(formData.get('name') || '').trim();
+    const capacity = Math.max(1, Number(formData.get('capacity')) || 30);
+    const rawProctors = String(formData.get('proctorsCount') || '').trim();
+    const proctorsCount = rawProctors ? Math.min(6, Math.max(1, Number(rawProctors) || 2)) : null;
+
+    if (!name) {
+      toast.error('يرجى إدخال اسم القاعة');
+      return;
+    }
+
+    const hallData = { name, capacity, proctorsCount };
 
     try {
       if (editingHall && editingHall.id) {
         await api.put(`/api/halls/${editingHall.id}`, hallData);
+        setHalls(prev => prev.map(h => (h.id === editingHall.id ? { ...h, ...hallData } : h)));
         toast.success('تم تحديث بيانات القاعة');
       } else {
-        await api.post('/api/halls', { ...hallData, id: `hall_${Date.now()}` });
+        const newHall: Hall = { ...hallData, id: `hall_${Date.now()}` };
+        const res = await api.post('/api/halls', newHall);
+        const createdId = res?.id || newHall.id;
+        setHalls(prev => [...prev, { ...newHall, id: createdId }]);
         toast.success('تمت إضافة القاعة بنجاح');
       }
+      form.reset();
       setShowHallForm(false);
       setEditingHall(null);
-      e.currentTarget.reset();
-      fetchData();
+      await fetchData();
     } catch (error) {
+      console.error('Error saving hall:', error);
       toast.error('خطأ في حفظ القاعة');
+    }
+  };
+
+  // Inline update for hall proctors count (e.g., 1 proctor exceptional case)
+  const handleUpdateHallProctors = async (hall: Hall, nextCount: number) => {
+    if (!hall.id) return;
+    const clamped = Math.min(6, Math.max(1, nextCount));
+    const prevHalls = halls;
+    setHalls(prev => prev.map(h => (h.id === hall.id ? { ...h, proctorsCount: clamped } : h)));
+    try {
+      await api.put(`/api/halls/${hall.id}`, { proctorsCount: clamped });
+      toast.success(
+        clamped === 1
+          ? `تم ضبط ${hall.name} على حارس واحد (حالة استثنائية)`
+          : `تم تعديل عدد حراس ${hall.name} إلى ${clamped}`
+      );
+    } catch (error) {
+      console.error('Error updating hall proctors:', error);
+      setHalls(prevHalls);
+      toast.error('خطأ في تحديث عدد الحراس');
     }
   };
 
@@ -466,11 +499,15 @@ export default function HallsPage() {
       try {
         const validHalls = mappedData
           .filter(row => row.name && String(row.name).trim() !== '')
-          .map((row, idx) => ({
-            id: `hall_${Date.now()}_${idx}`,
-            name: String(row.name).trim(),
-            capacity: Number(row.capacity) || 30,
-          }));
+          .map((row, idx) => {
+            const rawProctors = Number(row.proctorsCount);
+            return {
+              id: `hall_${Date.now()}_${idx}`,
+              name: String(row.name).trim(),
+              capacity: Number(row.capacity) || 30,
+              proctorsCount: Number.isFinite(rawProctors) && rawProctors >= 1 ? Math.min(6, rawProctors) : null,
+            };
+          });
 
         if (validHalls.length > 0) {
           await api.post('/api/halls/bulk', { halls: validHalls });
@@ -1447,11 +1484,19 @@ export default function HallsPage() {
                   <span className="text-xs font-mono font-bold text-slate-300">{capPercentage}% مستغل</span>
 
                   <button
-                    onClick={() => { setEditingHall(null); setShowHallForm(!showHallForm); }}
+                    onClick={() => {
+                      if (showHallForm || editingHall) {
+                        setEditingHall(null);
+                        setShowHallForm(false);
+                      } else {
+                        setEditingHall(null);
+                        setShowHallForm(true);
+                      }
+                    }}
                     className="flex items-center gap-1.5 bg-[#0099FF] hover:bg-sky-500 text-white font-black px-4 py-2 rounded-xl text-xs transition-all cursor-pointer shadow-md"
                   >
                     <Plus size={16} />
-                    {showHallForm ? 'إلغاء' : 'إضافة قاعة يدوياً'}
+                    {(showHallForm || editingHall) ? 'إلغاء' : 'إضافة قاعة يدوياً'}
                   </button>
 
                   <button
@@ -1475,7 +1520,7 @@ export default function HallsPage() {
                 exit={{ height: 0, opacity: 0 }}
                 className="overflow-hidden"
               >
-                <form onSubmit={handleSaveHall} className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-5 bg-[#121E36] rounded-2xl border border-slate-700 shadow-xl">
+                <form key={editingHall?.id || 'new'} onSubmit={handleSaveHall} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-5 bg-[#121E36] rounded-2xl border border-slate-700 shadow-xl">
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1">اسم القاعة *</label>
                     <input 
@@ -1491,10 +1536,27 @@ export default function HallsPage() {
                     <input 
                       type="number" 
                       name="capacity" 
+                      min={1}
                       defaultValue={editingHall?.capacity || 30} 
                       required 
                       className="w-full p-2.5 bg-[#182643] border border-slate-700 rounded-xl text-white font-bold outline-none focus:border-cyan-400 text-xs" 
                     />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">عدد الحراس</label>
+                    <select
+                      name="proctorsCount"
+                      defaultValue={editingHall?.proctorsCount ? String(editingHall.proctorsCount) : ''}
+                      className="w-full p-2.5 bg-[#182643] border border-slate-700 rounded-xl text-white font-bold outline-none focus:border-cyan-400 text-xs"
+                    >
+                      <option value="">افتراضي (2 حراس)</option>
+                      <option value="1">1 حارس (حالة استثنائية)</option>
+                      <option value="2">2 حراس</option>
+                      <option value="3">3 حراس</option>
+                      <option value="4">4 حراس</option>
+                      <option value="5">5 حراس</option>
+                      <option value="6">6 حراس</option>
+                    </select>
                   </div>
                   <div className="flex items-end">
                     <button type="submit" className="w-full bg-[#0099FF] text-white font-black py-2.5 rounded-xl hover:bg-sky-500 transition-all text-xs cursor-pointer shadow-md">
@@ -1511,6 +1573,7 @@ export default function HallsPage() {
             {halls.map((hall, idx) => {
               const assignedCount = students.filter(s => s.examHallId === hall.id).length;
               const assignedGroups = examGroups.filter(g => g.hallId === hall.id);
+              const effectiveProctors = hall.proctorsCount ?? 2;
 
               return (
                 <div key={hall.id || idx} className="bg-[#0D162A] p-5 rounded-2xl border border-slate-800 hover:border-cyan-500/50 transition-all group shadow-lg flex flex-col justify-between">
@@ -1549,6 +1612,38 @@ export default function HallsPage() {
                         <span className={`font-bold ${assignedCount > (hall.capacity || 30) ? 'text-rose-400' : assignedCount > 0 ? 'text-cyan-300' : 'text-slate-500'}`}>
                           {assignedCount} طالب
                         </span>
+                      </div>
+                      <div className="flex items-center justify-between pt-1">
+                        <span>عدد الحراس:</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateHallProctors(hall, Math.max(1, effectiveProctors - 1))}
+                            disabled={effectiveProctors <= 1}
+                            className="w-5 h-5 rounded-md bg-[#121E36] hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-slate-200 flex items-center justify-center font-bold cursor-pointer transition-colors"
+                            title="إنقاص عدد الحراس"
+                          >
+                            -
+                          </button>
+                          <span
+                            className={`font-bold px-1.5 py-0.5 rounded-md text-[11px] ${
+                              effectiveProctors === 1
+                                ? 'text-amber-300 bg-amber-500/15 border border-amber-500/30'
+                                : 'text-emerald-300'
+                            }`}
+                          >
+                            {effectiveProctors === 1 ? '1 (حارس واحد)' : `${effectiveProctors} حراس`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateHallProctors(hall, Math.min(6, effectiveProctors + 1))}
+                            disabled={effectiveProctors >= 6}
+                            className="w-5 h-5 rounded-md bg-[#121E36] hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-slate-200 flex items-center justify-center font-bold cursor-pointer transition-colors"
+                            title="زيادة عدد الحراس"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2454,7 +2549,8 @@ export default function HallsPage() {
         title={importTarget === 'halls' ? "استيراد القاعات" : "استيراد قائمة التلاميذ"}
         expectedColumns={importTarget === 'halls' ? [
           { key: 'name', label: 'اسم القاعة', required: true, aliases: ['اسم القاعة', 'القاعة', 'اسم', 'hall', 'name', 'salle'] },
-          { key: 'capacity', label: 'السعة (طالب)', aliases: ['السعة', 'سعة القاعة', 'capacity', 'capacite'] }
+          { key: 'capacity', label: 'السعة (طالب)', aliases: ['السعة', 'سعة القاعة', 'capacity', 'capacite'] },
+          { key: 'proctorsCount', label: 'عدد الحراس', aliases: ['عدد الحراس', 'الحراس', 'proctors', 'surveillants'] }
         ] : [
           { key: 'name', label: 'اللقب والاسم (أو الاسم الكامل)', required: true, aliases: ['اللقب والاسم', 'الاسم واللقب', 'اسم التلميذ', 'التلميذ', 'الاسم الكامل', 'الاسم واللقب والتخصص', 'اللقب والاسم القسم', 'name', 'student', 'eleve', 'full_name'] },
           { key: 'lastName', label: 'اللقب (إن وجد منفصلاً)', aliases: ['اللقب', 'nom', 'last_name', 'family_name'] },
